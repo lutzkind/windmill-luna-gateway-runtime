@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Verify upstream CLI contract
+        run: openai-api-server-via-codex serve --help
+      - name: Run gateway tests
+        run: PYTHONPATH=. pytest -q
+      - name: Validate Compose
+        env:
+          LUNA_GATEWAY_TOKEN: test-gateway-token
+          CODEX_UPSTREAM_API_KEY: test-sidecar-token
+          ENABLE_TEST_CONTROLS: "false"
+        run: docker compose -f docker-compose.yaml config >/dev/null
+      - name: Build image
+        run: docker build -t windmill-luna-gateway:test .
