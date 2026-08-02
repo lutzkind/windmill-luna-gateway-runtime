@@ -608,13 +608,19 @@ def json_error(
 
 
 def require_gateway_auth(request: Request, settings: Settings) -> None:
-    if not settings.gateway_token:
+    if not settings.allowed_api_key_sha256s:
         raise HTTPException(
             status_code=503, detail="gateway_not_configured"
         )
-    supplied = request.headers.get("x-luna-gateway-token", "").strip()
-    if not supplied or not hmac.compare_digest(
-        supplied, settings.gateway_token
+    authorization = request.headers.get("authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    supplied = token.strip() if scheme.lower() == "bearer" else ""
+    if not supplied:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    fingerprint = hashlib.sha256(supplied.encode("utf-8")).hexdigest()
+    if not any(
+        hmac.compare_digest(fingerprint, allowed)
+        for allowed in settings.allowed_api_key_sha256s
     ):
         raise HTTPException(status_code=401, detail="unauthorized")
 
