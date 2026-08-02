@@ -25,7 +25,7 @@ ProviderName = Literal["codex", "openai"]
 
 @dataclass(frozen=True)
 class Settings:
-    gateway_token: str
+    allowed_api_key_sha256s: frozenset[str]
     codex_url: str
     codex_api_key: str
     openai_url: str
