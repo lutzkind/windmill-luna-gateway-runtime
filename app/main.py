@@ -64,12 +64,19 @@ class Settings:
             ).split(",")
             if part.strip()
         )
+        allowed_key_hashes = frozenset(
+            part.strip().lower()
+            for part in os.getenv("ALLOWED_API_KEY_SHA256S", "").split(",")
+            if part.strip()
+        )
         return cls(
-            gateway_token=os.getenv("LUNA_GATEWAY_TOKEN", "").strip(),
+            allowed_api_key_sha256s=allowed_key_hashes,
             codex_url=os.getenv(
                 "CODEX_UPSTREAM_URL", "http://codex-upstream:18080/v1"
             ).rstrip("/"),
-            codex_api_key=os.getenv("CODEX_UPSTREAM_API_KEY", "").strip(),
+            codex_api_key=os.getenv(
+                "CODEX_UPSTREAM_API_KEY", "internal-codex-sidecar-v1"
+            ).strip(),
             openai_url=os.getenv(
                 "OPENAI_API_BASE_URL", "https://api.openai.com/v1"
             ).rstrip("/"),
