@@ -679,7 +679,7 @@ def create_app(
         circuit = await gateway.circuit.snapshot()
         return {
             "status": "ok",
-            "gateway_configured": bool(selected.gateway_token),
+            "gateway_configured": bool(selected.allowed_api_key_sha256s),
             "codex_configured": bool(selected.codex_api_key),
             "api_fallback": (
                 "caller_bearer_or_server"
