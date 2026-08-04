@@ -15,10 +15,6 @@ from typing import Any, Literal
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
 from jsonschema import ValidationError, validate as validate_json_schema
-
-LOGGER = logging.getLogger("windmill_luna_gateway")
-logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
-
 EndpointKind = Literal["chat", "responses"]
 ProviderName = Literal["codex", "openai"]
 API_PASSTHROUGH_METHODS: dict[str, frozenset[str]] = {
@@ -27,6 +23,35 @@ API_PASSTHROUGH_METHODS: dict[str, frozenset[str]] = {
     "audio/speech": frozenset({"POST"}),
     "embeddings": frozenset({"POST"}),
     "images/generations": frozenset({"POST"}),
+    "images/edits": frozenset({"POST"}),
+    "models": frozenset({"GET"}),
+}
+MAX_PASSTHROUGH_BODY_BYTES = 50 * 1024 * 1024
+REASONING_EFFORTS = frozenset({"none", "low", "medium", "high"})
+HIGH_REASONING_MARKERS = (
+    "learning optimizer",
+    "conversation learning",
+    "outreach optimizer",
+    "strategy optimizer",
+    "cross-conversation",
+    "root cause analysis",
+    "compare competing",
+    "multi-step decision",
+)
+MEDIUM_REASONING_MARKERS = (
+    "research",
+    "website review",
+    "review the website",
+    "social topic",
+    "social post",
+    "journal",
+    "weekly summary",
+    "synthesize",
+    "synthesis",
+    "call summary",
+    "transcription summary",
+    "content engine",
+)
     "images/edits": frozenset({"POST"}),
     "models": frozenset({"GET"}),
 }
