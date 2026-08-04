@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: ["openai-api-server-via-codex", "serve", "--host", "0.0.0.0", "--port", "18080", "--auth-json", "/root/.codex/auth.json", "--max-concurrent-requests", "4", "--timeout", "180"]
+    command: ["openai-api-server-via-codex", "serve", "--host", "0.0.0.0", "--port", "18080", "--auth-json", "/root/.codex/auth.json", "--max-concurrent-requests", "4", "--max-stored-items", "0", "--timeout", "180"]
     restart: unless-stopped
     environment:
       CODEX_HOME: /root/.codex
