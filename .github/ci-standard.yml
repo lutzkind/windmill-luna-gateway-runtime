@@ -1,0 +1,37 @@
+standard_version: 2.4.0
+profile: docker-service
+default_branch: main
+self_hosted_labels:
+  - self-hosted
+  - Linux
+  - X64
+  - ci
+  - isolated
+heavy_checks:
+  enabled: true
+  runner: self-hosted-linux
+  triggers:
+    paths:
+      - 'Dockerfile'
+      - 'Dockerfile.*'
+      - 'docker-compose*.yml'
+      - 'docker-compose*.yaml'
+      - 'compose*.yml'
+      - 'compose*.yaml'
+      - 'migrations/**'
+      - 'package-lock.json'
+      - 'pnpm-lock.yaml'
+      - 'yarn.lock'
+      - 'poetry.lock'
+      - 'uv.lock'
+      - '**/entrypoint*'
+      - '**/health*'
+      - 'deploy/**'
+      - '.dockerignore'
+custom_commands:
+  setup: 'git diff --check'
+  checks: 'git diff --check'
+exceptions:
+  - 'Docker, Compose, service-container, database and image parity is scheduled/manual and non-blocking'
+  - 'fast-ci-review-required: .github/workflows/ci.yml: heavy-check-path-split-recommended'
+  - 'application checks delegated to existing PR CI: .github/workflows/ci.yml'

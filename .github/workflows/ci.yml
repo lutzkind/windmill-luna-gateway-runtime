@@ -1,11 +1,14 @@
 name: CI
 on:
-  push:
-    branches: [main]
   pull_request:
+concurrency:
+  group: windmill-luna-gateway-runtime-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
-    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, ci, isolated]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
