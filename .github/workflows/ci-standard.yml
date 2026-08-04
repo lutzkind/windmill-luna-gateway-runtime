@@ -1,0 +1,43 @@
+name: CI (lutzkind standard)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/ci-standard.yml'
+      - '.github/workflows/ci-standard-heavy.yml'
+      - '.github/workflows/ci-standard.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windmill-luna-gateway-runtime-ci-standard-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Standard checks
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, Linux, X64, ci, isolated]
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - name: Run declared setup
+        id: setup
+        shell: bash
+        run: |
+          echo 'has_setup=false' >> "$GITHUB_OUTPUT"
+      - name: Run declared checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+      - name: Clean generated workspace data
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          rm -rf .pytest_cache .mypy_cache .ruff_cache coverage dist build
