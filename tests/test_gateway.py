@@ -195,3 +195,115 @@ def test_streaming_size_guards_and_health():
     assert health["codex_configured"] is True
     assert health["api_fallback"] == "caller_bearer"
     assert health["test_controls"] is True
+    assert health["test_controls"] is True
+
+
+def test_adaptive_reasoning_levels_and_explicit_override():
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        if request.url.path.endswith("/responses"):
+            return httpx.Response(
+                200,
+                json={
+                    "id": "r1",
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [
+                                {"type": "output_text", "text": "done"}
+                            ],
+                        }
+                    ],
+                },
+            )
+        return httpx.Response(200, json=success())
+
+    with client_for(handler) as client:
+        simple = client.post(
+            "/v1/chat/completions", headers=headers(), json=payload()
+        )
+        research = client.post(
+            "/v1/responses",
+            headers=headers(),
+            json={
+                "model": "luna-auto",
+                "input": "Research this website and synthesize the findings.",
+                "tools": [{"type": "web_search"}],
+            },
+        )
+        strategic = client.post(
+            "/v1/chat/completions",
+            headers=headers(),
+            json={
+                "model": "luna-auto",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "Run the conversation learning optimizer.",
+                    }
+                ],
+            },
+        )
+        explicit = client.post(
+            "/v1/chat/completions",
+            headers=headers(),
+            json={
+                "model": "luna-auto",
+                "reasoning_effort": "medium",
+                "messages": [{"role": "user", "content": "classify"}],
+            },
+        )
+
+    assert all(
+        response.status_code == 200
+        for response in (simple, research, strategic, explicit)
+    )
+    assert seen[0]["reasoning_effort"] == "low"
+    assert seen[1]["reasoning"] == {"effort": "medium"}
+    assert seen[2]["reasoning_effort"] == "high"
+    assert seen[3]["reasoning_effort"] == "medium"
+
+
+def test_quota_fallback_preserves_reasoning_effort():
+    seen = []
+
+    def handler(request):
+        seen.append((request.url.host, json.loads(request.content)))
+        if request.url.host == "codex.test":
+            return httpx.Response(
+                429,
+                json={"error": {"message": "Codex usage limit reached"}},
+            )
+        return httpx.Response(200, json=success("fallback"))
+
+    with client_for(handler) as client:
+        response = client.post(
+            "/v1/chat/completions", headers=headers(), json=payload()
+        )
+
+    assert response.status_code == 200
+    assert response.headers["x-luna-gateway-provider"] == "openai-api"
+    assert seen[0][1]["reasoning_effort"] == "low"
+    assert seen[1][1]["reasoning_effort"] == "low"
+
+
+def test_invalid_explicit_reasoning_is_rejected():
+    def handler(request):
+        raise AssertionError("provider called")
+
+    with client_for(handler) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            headers=headers(),
+            json={
+                "model": "luna-auto",
+                "reasoning_effort": "extreme",
+                "messages": [],
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "invalid_reasoning_effort"
