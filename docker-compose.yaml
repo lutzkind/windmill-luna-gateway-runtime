@@ -41,7 +41,7 @@ services:
       TRANSIENT_OPEN_SECONDS: "900"
       QUOTA_OPEN_SECONDS: "1800"
       AUTH_OPEN_SECONDS: "300"
-      ENABLE_TEST_CONTROLS: "true"
+      ENABLE_TEST_CONTROLS: "false"
     expose: ["8080"]
     networks: [gateway-private, coolify]
     healthcheck:
