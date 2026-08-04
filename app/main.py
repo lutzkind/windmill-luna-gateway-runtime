@@ -52,10 +52,7 @@ MEDIUM_REASONING_MARKERS = (
     "transcription summary",
     "content engine",
 )
-    "images/edits": frozenset({"POST"}),
-    "models": frozenset({"GET"}),
-}
-MAX_PASSTHROUGH_BODY_BYTES = 50 * 1024 * 1024
+
 
 
 @dataclass(frozen=True)
