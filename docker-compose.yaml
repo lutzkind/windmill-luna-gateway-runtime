@@ -28,7 +28,7 @@ services:
       codex-upstream:
         condition: service_healthy
     environment:
-      ALLOWED_API_KEY_SHA256S: "9f3728ab7322339b7efc6e95047ed18cd5d261a9f4fe251ba1805fb49524d76d"
+      ALLOWED_API_KEY_SHA256S: "9f3728ab7322339b7efc6e95047ed18cd5d261a9f4fe251ba1805fb49524d76d,68471dcada6d4d3b0468b20ad6ea6fc2ea21451d4d7a28b7fdb63be763679817"
       CODEX_UPSTREAM_API_KEY: internal-codex-sidecar-v1
       CODEX_UPSTREAM_URL: http://codex-upstream:18080/v1
       OPENAI_API_BASE_URL: https://api.openai.com/v1
