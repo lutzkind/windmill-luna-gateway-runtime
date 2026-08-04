@@ -767,14 +767,17 @@ def create_app(
         )
 
     @app.post("/v1/chat/completions")
+    @app.post("/chat/completions", include_in_schema=False)
     async def chat_completions(request: Request) -> Response:
         return await handle(request, "chat")
 
     @app.post("/v1/responses")
+    @app.post("/responses", include_in_schema=False)
     async def responses(request: Request) -> Response:
         return await handle(request, "responses")
 
     @app.api_route("/v1/{path:path}", methods=["GET", "POST"])
+    @app.api_route("/{path:path}", methods=["GET", "POST"], include_in_schema=False)
     async def openai_passthrough(path: str, request: Request) -> Response:
         require_gateway_auth(request, selected)
         method = request.method.upper()
