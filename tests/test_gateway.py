@@ -307,3 +307,39 @@ def test_invalid_explicit_reasoning_is_rejected():
 
     assert response.status_code == 400
     assert response.json()["detail"] == "invalid_reasoning_effort"
+
+
+def test_payload_only_context_guards_and_no_implicit_tools():
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json=success())
+
+    with client_for(handler) as client:
+        clean = client.post(
+            "/v1/chat/completions", headers=headers(), json=payload()
+        )
+        stored = client.post(
+            "/v1/chat/completions",
+            headers=headers(),
+            json={**payload(), "store": True},
+        )
+        chained = client.post(
+            "/v1/responses",
+            headers=headers(),
+            json={
+                "model": "luna-auto",
+                "input": "continue",
+                "previous_response_id": "resp_previous",
+            },
+        )
+
+    assert clean.status_code == 200
+    assert len(seen) == 1
+    assert "tools" not in seen[0]
+    assert "previous_response_id" not in seen[0]
+    assert stored.status_code == 400
+    assert stored.json()["detail"] == "persistent_storage_not_supported"
+    assert chained.status_code == 400
+    assert chained.json()["detail"] == "previous_response_id_not_supported"
