@@ -138,7 +138,19 @@ def test_responses_endpoint_preserves_web_search_tool():
     def handler(request):
         seen["url"] = str(request.url)
         seen["payload"] = json.loads(request.content)
-        return httpx.Response(200, json={"id": "r1", "status": "completed", "output": []})
+        return httpx.Response(
+            200,
+            json={
+                "id": "r1",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "done"}],
+                    }
+                ],
+            },
+        )
     request_payload = {"model": "luna-auto", "input": "research", "tools": [{"type": "web_search"}], "tool_choice": "required"}
     with client_for(handler) as client:
         response = client.post("/v1/responses", headers=headers(), json=request_payload)
