@@ -21,6 +21,16 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
 
 EndpointKind = Literal["chat", "responses"]
 ProviderName = Literal["codex", "openai"]
+API_PASSTHROUGH_METHODS: dict[str, frozenset[str]] = {
+    "audio/transcriptions": frozenset({"POST"}),
+    "audio/translations": frozenset({"POST"}),
+    "audio/speech": frozenset({"POST"}),
+    "embeddings": frozenset({"POST"}),
+    "images/generations": frozenset({"POST"}),
+    "images/edits": frozenset({"POST"}),
+    "models": frozenset({"GET"}),
+}
+MAX_PASSTHROUGH_BODY_BYTES = 50 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -217,9 +227,6 @@ class Gateway:
         if not isinstance(model, str) or not model.strip():
             raise HTTPException(status_code=400, detail="model is required")
         model = model.strip()
-        if model not in self.settings.allowed_models:
-            raise HTTPException(status_code=400, detail="model_not_allowed")
-
         normalized = dict(payload)
         normalized["model"] = self.settings.model_aliases.get(model, model)
         if normalized.get("stream") is True:
@@ -237,6 +244,15 @@ class Gateway:
         forced_failure: str | None = None,
     ) -> Response:
         normalized = self.normalize_payload(payload)
+        codex_models = frozenset(self.settings.model_aliases.values())
+        if normalized["model"] not in codex_models:
+            return await self._api_only_json(
+                kind=kind,
+                payload=normalized,
+                request_id=request_id,
+                api_key=fallback_api_key,
+            )
+
         skip, skip_reason = await self.circuit.should_skip()
 
         async with self.semaphore:
@@ -325,6 +341,48 @@ class Gateway:
                 fallback_reason=fallback_reason,
                 request_id=request_id,
             )
+
+    async def _api_only_json(
+        self,
+        *,
+        kind: EndpointKind,
+        payload: dict[str, Any],
+        request_id: str,
+        api_key: str,
+    ) -> Response:
+        if not api_key:
+            return json_error(status_code=502, message="No OpenAI API credential was supplied.", code="api_key_missing", request_id=request_id, fallback_reason="api_only_model")
+        async with self.semaphore:
+            result = await self._call_provider(provider="openai", kind=kind, payload=payload, request_id=request_id, api_key=api_key)
+        if result.response is None:
+            return json_error(status_code=502, message="The OpenAI API provider was unavailable.", code="api_provider_unavailable", request_id=request_id, fallback_reason=result.error_reason or "api_only_model")
+        return relay_response(result.response, provider="openai-api", fallback_used=False, fallback_reason=None, request_id=request_id)
+
+    async def proxy_openai_api(
+        self,
+        *,
+        path: str,
+        method: str,
+        body: bytes,
+        request_headers: dict[str, str],
+        request_id: str,
+        api_key: str,
+    ) -> Response:
+        if not api_key:
+            return json_error(status_code=502, message="No OpenAI API credential was supplied.", code="api_key_missing", request_id=request_id, fallback_reason="api_passthrough")
+        headers = {"Authorization": f"Bearer {api_key}", "Accept": request_headers.get("accept", "application/json"), "X-Request-ID": request_id}
+        for name in ("content-type", "openai-organization", "openai-project", "idempotency-key"):
+            value = request_headers.get(name)
+            if value:
+                headers[name] = value
+        try:
+            async with self.semaphore:
+                response = await self.client.request(method, f"{self.settings.openai_url}/{path}", headers=headers, content=body if method != "GET" else None)
+        except httpx.TimeoutException:
+            return json_error(status_code=504, message="The OpenAI API request timed out.", code="api_timeout", request_id=request_id, fallback_reason="api_passthrough")
+        except httpx.HTTPError:
+            return json_error(status_code=502, message="The OpenAI API request failed.", code="api_network", request_id=request_id, fallback_reason="api_passthrough")
+        return relay_response(response, provider="openai-api", fallback_used=False, fallback_reason=None, request_id=request_id)
 
     async def _call_provider(
         self,
@@ -715,6 +773,26 @@ def create_app(
     @app.post("/v1/responses")
     async def responses(request: Request) -> Response:
         return await handle(request, "responses")
+
+    @app.api_route("/v1/{path:path}", methods=["GET", "POST"])
+    async def openai_passthrough(path: str, request: Request) -> Response:
+        require_gateway_auth(request, selected)
+        method = request.method.upper()
+        allowed_methods = API_PASSTHROUGH_METHODS.get(path)
+        if allowed_methods is None or method not in allowed_methods:
+            raise HTTPException(status_code=404, detail="endpoint_not_allowed")
+        body = await request.body()
+        if len(body) > MAX_PASSTHROUGH_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="request_too_large")
+        request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+        return await gateway.proxy_openai_api(
+            path=path,
+            method=method,
+            body=body,
+            request_headers={key.lower(): value for key, value in request.headers.items()},
+            request_id=request_id,
+            api_key=fallback_api_key(request, selected),
+        )
 
     return app
 

@@ -160,13 +160,35 @@ def test_responses_endpoint_preserves_web_search_tool():
     assert seen["payload"]["tools"] == [{"type": "web_search"}]
 
 
-def test_guards_and_health():
+def test_api_only_model_and_media_passthrough():
+    seen = []
+    def handler(request):
+        seen.append((str(request.url), request.headers.get("authorization"), request.content))
+        if request.url.path.endswith("/audio/speech"):
+            return httpx.Response(200, content=b"audio-bytes", headers={"content-type": "audio/mpeg"})
+        return httpx.Response(200, json=success("api-only"))
+    with client_for(handler) as client:
+        model_response = client.post("/v1/chat/completions", headers=headers(), json={"model": "gpt-5-mini", "messages": []})
+        speech_response = client.post("/v1/audio/speech", headers={**headers(), "Content-Type": "application/json"}, content=b'{"model":"gpt-4o-mini-tts","input":"hi"}')
+        blocked = client.post("/v1/files", headers=headers(), content=b"x")
+    assert model_response.status_code == 200
+    assert model_response.headers["x-luna-gateway-provider"] == "openai-api"
+    assert model_response.headers["x-luna-gateway-fallback"] == "false"
+    assert speech_response.status_code == 200
+    assert speech_response.content == b"audio-bytes"
+    assert speech_response.headers["content-type"].startswith("audio/mpeg")
+    assert blocked.status_code == 404
+    assert seen[0][0] == "https://api.test/v1/chat/completions"
+    assert seen[1][0] == "https://api.test/v1/audio/speech"
+    assert all(item[1] == f"Bearer {CALLER_KEY}" for item in seen)
+
+
+def test_streaming_size_guards_and_health():
     def handler(request):
         raise AssertionError("provider called")
     with client_for(handler, max_body_bytes=20) as client:
         assert client.post("/v1/chat/completions", headers=headers(), json=payload()).status_code == 413
     with client_for(handler, enable_test_controls=True) as client:
-        assert client.post("/v1/chat/completions", headers=headers(), json={"model": "other", "messages": []}).status_code == 400
         assert client.post("/v1/chat/completions", headers=headers(), json={"model": "gpt-5.6-luna", "messages": [], "stream": True}).status_code == 400
         health = client.get("/health").json()
     assert health["gateway_configured"] is True
