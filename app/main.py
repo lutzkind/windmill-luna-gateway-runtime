@@ -364,7 +364,10 @@ class Gateway:
             )
 
         skip, skip_reason = await self.circuit.should_skip()
-
+        normalized, reasoning_effort, reasoning_source = (
+            apply_reasoning_policy(kind, normalized)
+        )
+        skip, skip_reason = await self.circuit.should_skip()
         async with self.semaphore:
             if forced_failure:
                 reason = forced_failure
