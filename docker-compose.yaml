@@ -63,6 +63,10 @@ services:
       - traefik.http.routers.luna-gateway-https.tls=true
       - traefik.http.routers.luna-gateway-https.tls.certresolver=letsencrypt
       - traefik.http.services.luna-gateway.loadbalancer.server.port=8080
+      - traefik.http.services.luna-gateway.loadbalancer.serverstransport=luna-gateway-transport@docker
+      - traefik.http.serverstransports.luna-gateway-transport.forwardingtimeouts.dialtimeout=30s
+      - traefik.http.serverstransports.luna-gateway-transport.forwardingtimeouts.responseheadertimeout=180s
+      - traefik.http.serverstransports.luna-gateway-transport.forwardingtimeouts.idleconntimeout=180s
 
 networks:
   gateway-private:
