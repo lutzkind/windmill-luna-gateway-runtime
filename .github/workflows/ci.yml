@@ -1,10 +1,8 @@
 name: CI
-
 on:
   push:
     branches: [main]
   pull_request:
-
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -20,10 +18,6 @@ jobs:
       - name: Run gateway tests
         run: PYTHONPATH=. pytest -q
       - name: Validate Compose
-        env:
-          LUNA_GATEWAY_TOKEN: test-gateway-token
-          CODEX_UPSTREAM_API_KEY: test-sidecar-token
-          ENABLE_TEST_CONTROLS: "false"
         run: docker compose -f docker-compose.yaml config >/dev/null
       - name: Build image
         run: docker build -t windmill-luna-gateway:test .

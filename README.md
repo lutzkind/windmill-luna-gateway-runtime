@@ -1,16 +1,21 @@
 # Windmill Luna Gateway
 
-Standalone OpenAI-compatible gateway for Windmill.
+Standalone OpenAI-compatible gateway for Windmill. It is unrelated to and fully separated from the Etsy renderer.
 
-- Codex/ChatGPT authentication is the primary provider through a pinned `openai-api-server-via-codex` sidecar.
-- The official OpenAI API is used only when Codex is unavailable, rate-limited, or out of quota.
-- The gateway and provider credentials are supplied only as runtime environment variables.
-- The Etsy renderer is a completely separate repository and deployment.
+## Routing
 
-Supported endpoints:
+- Primary: pinned `openai-api-server-via-codex` sidecar using the host's Codex authentication.
+- Fallback: official OpenAI API on Codex quota, rate limit, authentication, network, timeout, upstream failure, or invalid structured output.
+- Circuit breaking prevents repeated Codex attempts while an outage or quota condition is active.
+
+## Authentication
+
+Windmill sends its existing OpenAI API key as `Authorization: Bearer ...`. The gateway authorizes callers using a SHA-256 fingerprint; the raw key is not stored in this repository. The bearer is forwarded only when official-API fallback is required.
+
+## Endpoints
 
 - `POST /v1/chat/completions`
 - `POST /v1/responses`
 - `GET /health`
 
-Clients authenticate with `X-Luna-Gateway-Token`. Their existing OpenAI bearer token is retained only for the fallback request.
+`ENABLE_TEST_CONTROLS` is enabled only for live fallback verification and is disabled immediately afterward.

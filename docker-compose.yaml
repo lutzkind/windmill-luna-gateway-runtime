@@ -3,35 +3,17 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command:
-      - openai-api-server-via-codex
-      - serve
-      - --host
-      - 0.0.0.0
-      - --port
-      - "18080"
-      - --auth-json
-      - /root/.codex/auth.json
-      - --max-concurrent-requests
-      - "4"
-      - --timeout
-      - "180"
+    command: ["openai-api-server-via-codex", "serve", "--host", "0.0.0.0", "--port", "18080", "--auth-json", "/root/.codex/auth.json", "--max-concurrent-requests", "4", "--timeout", "180"]
     restart: unless-stopped
     environment:
       CODEX_HOME: /root/.codex
-      OPENAI_VIA_CODEX_API_KEY: ${CODEX_UPSTREAM_API_KEY}
+      OPENAI_VIA_CODEX_API_KEY: internal-codex-sidecar-v1
     volumes:
-      - /root/.codex/auth.json:/root/.codex/auth.json
-    expose:
-      - "18080"
-    networks:
-      - gateway-private
+      - /root/.codex/auth.json:/root/.codex/auth.json:ro
+    expose: ["18080"]
+    networks: [gateway-private]
     healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:18080/healthz', timeout=5)
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18080/healthz', timeout=5)"]
       interval: 15s
       timeout: 8s
       retries: 5
@@ -46,8 +28,8 @@ services:
       codex-upstream:
         condition: service_healthy
     environment:
-      LUNA_GATEWAY_TOKEN: ${LUNA_GATEWAY_TOKEN}
-      CODEX_UPSTREAM_API_KEY: ${CODEX_UPSTREAM_API_KEY}
+      ALLOWED_API_KEY_SHA256S: "9f3728ab7322339b7efc6e95047ed18cd5d261a9f4fe251ba1805fb49524d76d"
+      CODEX_UPSTREAM_API_KEY: internal-codex-sidecar-v1
       CODEX_UPSTREAM_URL: http://codex-upstream:18080/v1
       OPENAI_API_BASE_URL: https://api.openai.com/v1
       ALLOWED_MODELS: gpt-5.6-luna,luna-auto
@@ -59,18 +41,11 @@ services:
       TRANSIENT_OPEN_SECONDS: "900"
       QUOTA_OPEN_SECONDS: "1800"
       AUTH_OPEN_SECONDS: "300"
-      ENABLE_TEST_CONTROLS: ${ENABLE_TEST_CONTROLS:-false}
-    expose:
-      - "8080"
-    networks:
-      - gateway-private
-      - coolify
+      ENABLE_TEST_CONTROLS: "true"
+    expose: ["8080"]
+    networks: [gateway-private, coolify]
     healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5)
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5)"]
       interval: 15s
       timeout: 8s
       retries: 5
