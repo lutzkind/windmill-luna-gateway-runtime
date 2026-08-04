@@ -65,6 +65,25 @@ services:
       - traefik.http.services.luna-gateway.loadbalancer.server.port=8080
       - traefik.http.services.luna-gateway.loadbalancer.serverstransport=luna-gateway-transport@file
 
+  traefik-config-installer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command:
+      - sh
+      - -c
+      - cp /app/traefik/luna-gateway-transport.yml /dynamic/luna-gateway-transport.yml && exec tail -f /dev/null
+    restart: unless-stopped
+    user: "9999:0"
+    network_mode: none
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - /data/coolify/proxy/dynamic:/dynamic
+
 networks:
   gateway-private:
   coolify:
