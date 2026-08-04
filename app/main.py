@@ -348,6 +348,14 @@ class Gateway:
             raise HTTPException(
                 status_code=400, detail="streaming_not_supported"
             )
+        if normalized.get("store") is True:
+            raise HTTPException(
+                status_code=400, detail="persistent_storage_not_supported"
+            )
+        if normalized.get("previous_response_id") is not None:
+            raise HTTPException(
+                status_code=400, detail="previous_response_id_not_supported"
+            )
         return normalized
 
     async def request(
