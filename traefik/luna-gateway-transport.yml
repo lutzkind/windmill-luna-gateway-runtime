@@ -1,0 +1,7 @@
+http:
+  serversTransports:
+    luna-gateway-transport:
+      forwardingTimeouts:
+        dialTimeout: 30s
+        responseHeaderTimeout: 180s
+        idleConnTimeout: 180s
