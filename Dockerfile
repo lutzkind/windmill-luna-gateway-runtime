@@ -7,7 +7,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
-COPY traefik ./traefik
 
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=8s --start-period=20s --retries=5 \
