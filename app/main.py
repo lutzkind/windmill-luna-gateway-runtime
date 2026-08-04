@@ -226,6 +226,94 @@ class ProviderResult:
     error_detail: str | None = None
 
 
+def _prompt_text(value: Any, *, limit: int = 50000) -> str:
+    parts: list[str] = []
+    length = 0
+
+    def visit(item: Any) -> None:
+        nonlocal length
+        if length >= limit:
+            return
+        if isinstance(item, str):
+            remaining = limit - length
+            part = item[:remaining]
+            parts.append(part)
+            length += len(part)
+        elif isinstance(item, dict):
+            for nested in item.values():
+                visit(nested)
+        elif isinstance(item, list):
+            for nested in item:
+                visit(nested)
+
+    if isinstance(value, dict):
+        for key in ("instructions", "input", "messages"):
+            visit(value.get(key))
+    return "\n".join(parts).lower()
+
+
+def _explicit_reasoning_effort(
+    kind: EndpointKind, payload: dict[str, Any]
+) -> str | None:
+    effort: Any = None
+    if kind == "chat":
+        effort = payload.get("reasoning_effort")
+    else:
+        reasoning = payload.get("reasoning")
+        if isinstance(reasoning, dict):
+            effort = reasoning.get("effort")
+    if effort is None:
+        return None
+    if not isinstance(effort, str) or effort not in REASONING_EFFORTS:
+        raise HTTPException(
+            status_code=400, detail="invalid_reasoning_effort"
+        )
+    return effort
+
+
+def select_reasoning_effort(
+    kind: EndpointKind, payload: dict[str, Any]
+) -> tuple[str, str]:
+    explicit = _explicit_reasoning_effort(kind, payload)
+    if explicit:
+        return explicit, "explicit"
+
+    text = _prompt_text(payload)
+    if any(marker in text for marker in HIGH_REASONING_MARKERS):
+        return "high", "adaptive"
+
+    tools = payload.get("tools")
+    has_web_search = isinstance(tools, list) and any(
+        isinstance(tool, dict) and tool.get("type") == "web_search"
+        for tool in tools
+    )
+    messages = payload.get("messages")
+    message_count = len(messages) if isinstance(messages, list) else 0
+    if (
+        has_web_search
+        or any(marker in text for marker in MEDIUM_REASONING_MARKERS)
+        or len(text) > 12000
+        or message_count > 6
+    ):
+        return "medium", "adaptive"
+    return "low", "adaptive"
+
+
+def apply_reasoning_policy(
+    kind: EndpointKind, payload: dict[str, Any]
+) -> tuple[dict[str, Any], str, str]:
+    effort, source = select_reasoning_effort(kind, payload)
+    normalized = dict(payload)
+    if kind == "chat":
+        normalized["reasoning_effort"] = effort
+    else:
+        reasoning = normalized.get("reasoning")
+        updated = dict(reasoning) if isinstance(reasoning, dict) else {}
+        updated["effort"] = effort
+        normalized["reasoning"] = updated
+    return normalized, effort, source
+
+
 class Gateway:
     def __init__(
         self,
