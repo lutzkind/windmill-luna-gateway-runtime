@@ -780,6 +780,8 @@ def create_app(
     @app.api_route("/{path:path}", methods=["GET", "POST"], include_in_schema=False)
     async def openai_passthrough(path: str, request: Request) -> Response:
         require_gateway_auth(request, selected)
+        if path.startswith("v1/"):
+            path = path[3:]
         method = request.method.upper()
         allowed_methods = API_PASSTHROUGH_METHODS.get(path)
         if allowed_methods is None or method not in allowed_methods:
