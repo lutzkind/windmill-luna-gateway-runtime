@@ -54,8 +54,7 @@ def _prompt_from_messages(messages: Any) -> str:
     if not isinstance(messages, list):
         return ""
     sections: list[str] = [
-        "Complete this bounded language task without using shell, filesystem, network, MCP, or other tools. "
-        "Use only the supplied messages. Return only the final requested answer."
+        "Use only the supplied messages. Do not use tools."
     ]
     for message in messages:
         if not isinstance(message, dict):
@@ -150,13 +149,11 @@ async def _run_codex_once(prompt: str, schema: dict[str, Any] | None, require_js
             schema_path.write_text(json.dumps(schema, ensure_ascii=False), encoding="utf-8")
             command.extend(["--output-schema", str(schema_path)])
             prompt = (
-                "Your final response must be exactly one strict JSON object satisfying the supplied schema. "
-                "Do not return markdown, prose outside the object, or code fences.\n\n" + prompt
+                "Return one JSON object matching the supplied schema.\n\n" + prompt
             )
         elif require_json:
             prompt = (
-                "Your final response must be exactly one valid JSON object. Do not return markdown, prose outside "
-                "the object, or code fences. Preserve the keys and structure requested by the user.\n\n" + prompt
+                "Return one valid JSON object only.\n\n" + prompt
             )
 
         env = os.environ.copy()
