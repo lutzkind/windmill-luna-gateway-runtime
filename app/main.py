@@ -864,6 +864,8 @@ def create_app(
         return {
             "status": "ok",
             "gateway_configured": bool(selected.allowed_api_key_sha256s),
+            "windmill_caller_allowed": "f777774c7a4100fc25022f34d27483a9080679aed01a0fca54ced407ca09df9f" in selected.allowed_api_key_sha256s,
+            "allowed_caller_count": len(selected.allowed_api_key_sha256s),
             "codex_configured": bool(selected.codex_api_key),
             "api_fallback": (
                 "caller_bearer_or_server"
