@@ -29,6 +29,20 @@ def test_none_reasoning_maps_to_codex_minimal():
     assert codex_upstream._codex_reasoning_effort("low") == "low"
 
 
+def test_runtime_home_uses_bootstrapped_auth_without_reading_source_mount(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    runtime_home = tmp_path / "runtime-home"
+    runtime_home.mkdir()
+    target_auth = runtime_home / "auth.json"
+    target_auth.write_text('{"bootstrapped":true}', encoding="utf-8")
+
+    monkeypatch.setattr(codex_upstream, "RUNTIME_CODEX_HOME", runtime_home)
+    monkeypatch.setattr(codex_upstream, "CODEX_AUTH_SOURCE", tmp_path / "root-owned-source.json")
+
+    codex_upstream._prepare_runtime_home()
+
+    assert target_auth.read_text(encoding="utf-8") == '{"bootstrapped":true}'
+
+
 def test_open_json_object_contract_is_validated_without_cli_schema():
     assert codex_upstream._chat_schema({"response_format": {"type": "json_object"}}) is None
     assert codex_upstream._responses_schema({"text": {"format": {"type": "json"}}}) is None

@@ -120,12 +120,13 @@ def _responses_schema(payload: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _prepare_runtime_home() -> None:
-    source_auth = CODEX_AUTH_SOURCE
-    if not source_auth.is_file():
-        raise HTTPException(status_code=503, detail="codex authentication is unavailable")
     RUNTIME_CODEX_HOME.mkdir(parents=True, exist_ok=True)
     target_auth = RUNTIME_CODEX_HOME / "auth.json"
-    shutil.copy2(source_auth, target_auth)
+    if not target_auth.is_file():
+        source_auth = CODEX_AUTH_SOURCE
+        if not source_auth.is_file():
+            raise HTTPException(status_code=503, detail="codex authentication is unavailable")
+        shutil.copy2(source_auth, target_auth)
     target_auth.chmod(0o600)
     # Intentionally do not copy config.toml. Completion jobs must never load MCP tools.
 
