@@ -48,7 +48,7 @@ services:
       AUTH_OPEN_SECONDS: "300"
       ENABLE_TEST_CONTROLS: "false"
     expose: ["8080"]
-    networks: [gateway-private, coolify]
+    networks: [gateway-private, coolify, windmill]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5)"]
       interval: 15s
@@ -74,3 +74,6 @@ networks:
   gateway-private:
   coolify:
     external: true
+  windmill:
+    external: true
+    name: ${WINDMILL_NETWORK_NAME:-m9qaud6gadgni5bxty30bkdl}
