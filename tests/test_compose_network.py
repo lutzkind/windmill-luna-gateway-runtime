@@ -26,3 +26,6 @@ def test_gateway_containers_are_least_privilege():
     dockerfile_text = (Path(__file__).parents[1] / "Dockerfile").read_text(encoding="utf-8")
     assert "chown 10001:0 /tmp/luna-codex-home" in dockerfile_text
     assert "chmod 0770 /tmp/luna-codex-home" in dockerfile_text
+    entrypoint_text = (Path(__file__).parents[1] / "runtime-entrypoint.sh").read_text(encoding="utf-8")
+    assert 'chown "$runtime_uid:0" "$codex_home"' in entrypoint_text
+    assert 'chmod 0770 "$codex_home"' in entrypoint_text

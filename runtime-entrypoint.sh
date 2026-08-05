@@ -7,9 +7,11 @@ auth_source="${CODEX_AUTH_SOURCE:-}"
 codex_home="${CODEX_HOME:-/tmp/luna-codex-home}"
 
 if [ "$(id -u)" -eq 0 ]; then
+    mkdir -p "$codex_home"
+    chown "$runtime_uid:0" "$codex_home"
+    chmod 0770 "$codex_home"
     if [ -n "$auth_source" ]; then
         test -r "$auth_source"
-        mkdir -p "$codex_home"
         cp "$auth_source" "$codex_home/auth.json"
         chown "$runtime_uid:$runtime_gid" "$codex_home/auth.json"
         chmod 0600 "$codex_home/auth.json"
