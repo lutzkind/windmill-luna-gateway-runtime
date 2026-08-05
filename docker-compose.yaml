@@ -27,6 +27,8 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    ports:
+      - "3036:8080"
     depends_on:
       codex-upstream:
         condition: service_healthy
