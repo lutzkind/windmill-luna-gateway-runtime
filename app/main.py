@@ -99,7 +99,7 @@ class Settings:
         configured_key_hashes = os.getenv("ALLOWED_API_KEY_SHA256S", "")
         additional_key_hashes = os.getenv(
             "ADDITIONAL_ALLOWED_API_KEY_SHA256S",
-            "68471dcada6d4d3b0468b20ad6ea6fc2ea21451d4d7a28b7fdb63be763679817",
+            "68471dcada6d4d3b0468b20ad6ea6fc2ea21451d4d7a28b7fdb63be763679817,f777774c7a4100fc25022f34d27483a9080679aed01a0fca54ced407ca09df9f",
         )
         allowed_key_hashes = frozenset(
             part.strip().lower()
