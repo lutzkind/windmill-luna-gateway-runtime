@@ -16,11 +16,11 @@ def test_codex_command_forwards_model_and_reasoning_effort():
     )
 
     assert command[command.index("--model") + 1] == "gpt-5.6-luna"
-    assert command[command.index("-c") + 1] == 'model_reasoning_effort="low"'
+    assert 'model_reasoning_effort="low"' in command
     assert "--sandbox" in command
     assert command[command.index("--sandbox") + 1] == "read-only"
-    assert "--ask-for-approval" in command
-    assert command[command.index("--ask-for-approval") + 1] == "never"
+    assert "-c" in command
+    assert 'approval_policy="never"' in command
     assert "--ignore-user-config" in command
 
 
