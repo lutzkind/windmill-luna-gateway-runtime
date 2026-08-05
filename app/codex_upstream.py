@@ -18,10 +18,15 @@ API_KEY = os.environ.get("OPENAI_VIA_CODEX_API_KEY", "").strip()
 CODEX_BINARY = os.environ.get("CODEX_BINARY", "codex").strip() or "codex"
 CODEX_MODEL = os.environ.get("CODEX_MODEL", "").strip()
 SOURCE_CODEX_HOME = Path(os.environ.get("CODEX_HOME", "/root/.codex").strip() or "/root/.codex")
+CODEX_AUTH_SOURCE = Path(
+    os.environ.get("CODEX_AUTH_SOURCE", str(SOURCE_CODEX_HOME / "auth.json")).strip()
+    or str(SOURCE_CODEX_HOME / "auth.json")
+)
 RUNTIME_CODEX_HOME = Path(os.environ.get("LUNA_CODEX_HOME", "/tmp/luna-codex-home").strip() or "/tmp/luna-codex-home")
 TIMEOUT_SECONDS = max(30, int(os.environ.get("CODEX_TIMEOUT_SECONDS", "180")))
 MAX_CONCURRENCY = max(1, int(os.environ.get("CODEX_MAX_CONCURRENCY", "4")))
 SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENCY)
+CODEX_REASONING_EFFORTS = frozenset({"minimal", "low", "medium", "high", "xhigh"})
 
 
 def _authorize(authorization: str | None) -> None:
@@ -115,7 +120,7 @@ def _responses_schema(payload: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _prepare_runtime_home() -> None:
-    source_auth = SOURCE_CODEX_HOME / "auth.json"
+    source_auth = CODEX_AUTH_SOURCE
     if not source_auth.is_file():
         raise HTTPException(status_code=503, detail="codex authentication is unavailable")
     RUNTIME_CODEX_HOME.mkdir(parents=True, exist_ok=True)
@@ -125,29 +130,66 @@ def _prepare_runtime_home() -> None:
     # Intentionally do not copy config.toml. Completion jobs must never load MCP tools.
 
 
-async def _run_codex_once(prompt: str, schema: dict[str, Any] | None, require_json: bool) -> str:
+def _codex_reasoning_effort(value: Any) -> str | None:
+    if value is None or not str(value).strip():
+        return None
+    normalized = str(value).strip().lower()
+    if normalized == "none":
+        return "minimal"
+    if normalized not in CODEX_REASONING_EFFORTS:
+        raise HTTPException(status_code=400, detail="invalid_reasoning_effort")
+    return normalized
+
+
+def _build_codex_command(
+    output_path: str,
+    *,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+    schema_path: Path | None = None,
+) -> list[str]:
+    command = [
+        CODEX_BINARY,
+        "exec",
+        "--ephemeral",
+        "--skip-git-repo-check",
+        "--ignore-user-config",
+        "--ask-for-approval",
+        "never",
+        "--sandbox",
+        "read-only",
+        "--color",
+        "never",
+        "--output-last-message",
+        output_path,
+    ]
+    selected_model = str(model or CODEX_MODEL).strip()
+    if selected_model:
+        command.extend(["--model", selected_model])
+    selected_effort = _codex_reasoning_effort(reasoning_effort)
+    if selected_effort:
+        command.extend(["-c", f'model_reasoning_effort="{selected_effort}"'])
+    if schema_path is not None:
+        command.extend(["--output-schema", str(schema_path)])
+    return command
+
+
+async def _run_codex_once(
+    prompt: str,
+    schema: dict[str, Any] | None,
+    require_json: bool,
+    *,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+) -> str:
     _prepare_runtime_home()
     with tempfile.TemporaryDirectory(prefix="luna-codex-") as tmp_dir:
         tmp_path = Path(tmp_dir)
         output_path = tmp_path / "final.txt"
-        command = [
-            CODEX_BINARY,
-            "exec",
-            "--ephemeral",
-            "--skip-git-repo-check",
-            "--sandbox",
-            "read-only",
-            "--color",
-            "never",
-            "--output-last-message",
-            str(output_path),
-        ]
-        if CODEX_MODEL:
-            command.extend(["--model", CODEX_MODEL])
+        schema_path: Path | None = None
         if schema is not None:
             schema_path = tmp_path / "schema.json"
             schema_path.write_text(json.dumps(schema, ensure_ascii=False), encoding="utf-8")
-            command.extend(["--output-schema", str(schema_path)])
             prompt = (
                 "Return one JSON object matching the supplied schema.\n\n" + prompt
             )
@@ -155,6 +197,19 @@ async def _run_codex_once(prompt: str, schema: dict[str, Any] | None, require_js
             prompt = (
                 "Return one valid JSON object only.\n\n" + prompt
             )
+        command = _build_codex_command(
+            str(output_path),
+            model=model,
+            reasoning_effort=reasoning_effort,
+            schema_path=schema_path,
+        )
+        print(json.dumps({
+            "event": "codex_invocation",
+            "model": str(model or CODEX_MODEL).strip() or None,
+            "reasoning_effort": _codex_reasoning_effort(reasoning_effort),
+            "sandbox": "read-only",
+            "approval_policy": "never",
+        }, sort_keys=True))
 
         env = os.environ.copy()
         env["CODEX_HOME"] = str(RUNTIME_CODEX_HOME)
@@ -193,6 +248,9 @@ async def _run_codex(
     prompt: str,
     schema: dict[str, Any] | None = None,
     require_json: bool = False,
+    *,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
 ) -> str:
     if not prompt.strip():
         raise HTTPException(status_code=400, detail="empty prompt")
@@ -200,7 +258,13 @@ async def _run_codex(
         raise HTTPException(status_code=503, detail="codex binary unavailable")
 
     async with SEMAPHORE:
-        output = await _run_codex_once(prompt, schema, require_json)
+        output = await _run_codex_once(
+            prompt,
+            schema,
+            require_json,
+            model=model,
+            reasoning_effort=reasoning_effort,
+        )
         if not require_json:
             return output
         try:
@@ -212,7 +276,13 @@ async def _run_codex(
                 f"valid JSON object{schema_instruction}. No markdown or surrounding prose.\n\n"
                 f"ORIGINAL TASK:\n{prompt}\n\nINVALID PRIOR OUTPUT:\n{output[:6000]}"
             )
-            output = await _run_codex_once(repair_prompt, schema, True)
+            output = await _run_codex_once(
+                repair_prompt,
+                schema,
+                True,
+                model=model,
+                reasoning_effort=reasoning_effort,
+            )
             try:
                 parsed = json.loads(output)
             except json.JSONDecodeError as exc:
@@ -225,12 +295,15 @@ async def _run_codex(
 @app.get("/healthz")
 async def healthz() -> dict[str, Any]:
     return {
-        "ok": shutil.which(CODEX_BINARY) is not None and (SOURCE_CODEX_HOME / "auth.json").is_file(),
+        "ok": shutil.which(CODEX_BINARY) is not None and CODEX_AUTH_SOURCE.is_file(),
         "provider": "official-codex-cli",
         "binary": CODEX_BINARY,
         "max_concurrency": MAX_CONCURRENCY,
         "structured_output": True,
         "mcp_tools_loaded": False,
+        "reasoning_forwarding": True,
+        "model_forwarding": True,
+        "sandbox": "read-only",
     }
 
 
@@ -248,6 +321,8 @@ async def chat_completions(payload: dict[str, Any], authorization: str | None = 
         _prompt_from_messages(payload.get("messages")),
         _chat_schema(payload),
         _chat_requires_json(payload),
+        model=requested_model,
+        reasoning_effort=payload.get("reasoning_effort"),
     )
     return {
         "id": f"chatcmpl_{uuid.uuid4().hex}",
@@ -267,6 +342,10 @@ async def responses(payload: dict[str, Any], authorization: str | None = Header(
         _prompt_from_responses_input(payload.get("input")),
         _responses_schema(payload),
         _responses_requires_json(payload),
+        model=requested_model,
+        reasoning_effort=(payload.get("reasoning") or {}).get("effort")
+        if isinstance(payload.get("reasoning"), dict)
+        else None,
     )
     response_id = f"resp_{uuid.uuid4().hex}"
     return {

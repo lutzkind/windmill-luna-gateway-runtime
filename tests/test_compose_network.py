@@ -13,3 +13,13 @@ def test_windmill_gateway_has_private_windmill_network_path():
     assert "networks: [gateway-private, coolify, windmill]" in gateway_block
     assert "  windmill:\n    external: true\n" in text
     assert "name: ${WINDMILL_NETWORK_NAME:-m9qaud6gadgni5bxty30bkdl}" in text
+
+
+def test_gateway_containers_are_least_privilege():
+    text = COMPOSE.read_text(encoding="utf-8")
+
+    assert "read_only: true" in text
+    assert "no-new-privileges:true" in text
+    assert "cap_drop: [ALL]" in text
+    assert "CODEX_AUTH_SOURCE: /run/secrets/codex-auth.json" in text
+    assert "/run/secrets/codex-auth.json:ro" in text

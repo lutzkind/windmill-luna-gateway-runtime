@@ -5,15 +5,23 @@ services:
       dockerfile: Dockerfile
     command: ["uvicorn", "app.codex_upstream:app", "--host", "0.0.0.0", "--port", "18080", "--workers", "1"]
     restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_READ_SEARCH, FOWNER, SETGID, SETPCAP, SETUID]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /run:rw,nosuid,nodev,size=32m
+      - /tmp:rw,nosuid,nodev,size=512m
     environment:
-      CODEX_HOME: /root/.codex
+      CODEX_HOME: /tmp/luna-codex-home
+      CODEX_AUTH_SOURCE: /run/secrets/codex-auth.json
       CODEX_BINARY: codex
       CODEX_MAX_CONCURRENCY: "4"
       CODEX_TIMEOUT_SECONDS: "180"
       OPENAI_VIA_CODEX_API_KEY: internal-codex-sidecar-v1
     volumes:
       # Keep the gateway's ChatGPT/Codex account separate from the host Codex session.
-      - /root/.codex-gateway/auth.json:/root/.codex/auth.json:ro
+      - /root/.codex-gateway/auth.json:/run/secrets/codex-auth.json:ro
     expose: ["18080"]
     networks: [gateway-private]
     healthcheck:
@@ -28,6 +36,12 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=128m
     ports:
       - "3036:8080"
     depends_on:

@@ -8,9 +8,15 @@ WORKDIR /app
 COPY requirements.txt .
 RUN python -m pip install --no-cache-dir -r requirements.txt
 COPY app ./app
+COPY runtime-entrypoint.sh /usr/local/bin/luna-runtime-entrypoint
+RUN groupadd --system --gid 10001 luna-runtime \
+    && useradd --system --uid 10001 --gid 10001 --home-dir /home/luna-runtime --create-home --shell /usr/sbin/nologin luna-runtime \
+    && mkdir -p /home/luna-runtime /tmp/luna-codex-home \
+    && chown -R 10001:10001 /home/luna-runtime /tmp/luna-codex-home \
+    && chmod 0555 /usr/local/bin/luna-runtime-entrypoint
 
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=8s --start-period=20s --retries=5 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5)"
-ENTRYPOINT ["tini", "--"]
+ENTRYPOINT ["tini", "--", "/usr/local/bin/luna-runtime-entrypoint"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]

@@ -8,6 +8,27 @@ from fastapi import HTTPException
 from app import codex_upstream
 
 
+def test_codex_command_forwards_model_and_reasoning_effort():
+    command = codex_upstream._build_codex_command(
+        output_path="/tmp/final.txt",
+        model="gpt-5.6-luna",
+        reasoning_effort="low",
+    )
+
+    assert command[command.index("--model") + 1] == "gpt-5.6-luna"
+    assert command[command.index("-c") + 1] == 'model_reasoning_effort="low"'
+    assert "--sandbox" in command
+    assert command[command.index("--sandbox") + 1] == "read-only"
+    assert "--ask-for-approval" in command
+    assert command[command.index("--ask-for-approval") + 1] == "never"
+    assert "--ignore-user-config" in command
+
+
+def test_none_reasoning_maps_to_codex_minimal():
+    assert codex_upstream._codex_reasoning_effort("none") == "minimal"
+    assert codex_upstream._codex_reasoning_effort("low") == "low"
+
+
 def test_open_json_object_contract_is_validated_without_cli_schema():
     assert codex_upstream._chat_schema({"response_format": {"type": "json_object"}}) is None
     assert codex_upstream._responses_schema({"text": {"format": {"type": "json"}}}) is None
@@ -18,8 +39,8 @@ def test_open_json_object_contract_is_validated_without_cli_schema():
 def test_json_object_output_is_repaired_without_passing_invalid_schema(monkeypatch: pytest.MonkeyPatch):
     calls: list[tuple[str, object]] = []
 
-    async def fake_run(prompt: str, schema: object, require_json: bool) -> str:
-        calls.append((prompt, schema, require_json))
+    async def fake_run(prompt: str, schema: object, require_json: bool, **kwargs: object) -> str:
+        calls.append((prompt, schema, require_json, kwargs))
         return "not json" if len(calls) == 1 else '{"ok":true}'
 
     monkeypatch.setattr(codex_upstream, "_run_codex_once", fake_run)
@@ -32,7 +53,7 @@ def test_json_object_output_is_repaired_without_passing_invalid_schema(monkeypat
 
 
 def test_json_object_parser_rejects_non_object():
-    async def fake_run(prompt: str, schema: object, require_json: bool) -> str:
+    async def fake_run(prompt: str, schema: object, require_json: bool, **kwargs: object) -> str:
         return "[]"
 
     original = codex_upstream._run_codex_once
