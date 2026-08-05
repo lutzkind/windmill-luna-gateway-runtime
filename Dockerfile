@@ -13,6 +13,8 @@ RUN groupadd --system --gid 10001 luna-runtime \
     && useradd --system --uid 10001 --gid 10001 --home-dir /home/luna-runtime --create-home --shell /usr/sbin/nologin luna-runtime \
     && mkdir -p /home/luna-runtime /tmp/luna-codex-home \
     && chown -R 10001:10001 /home/luna-runtime /tmp/luna-codex-home \
+    && chown 10001:0 /tmp/luna-codex-home \
+    && chmod 0770 /tmp/luna-codex-home \
     && chmod 0555 /usr/local/bin/luna-runtime-entrypoint
 
 EXPOSE 8080

@@ -23,3 +23,6 @@ def test_gateway_containers_are_least_privilege():
     assert "cap_drop: [ALL]" in text
     assert "CODEX_AUTH_SOURCE: /run/secrets/codex-auth.json" in text
     assert "/run/secrets/codex-auth.json:ro" in text
+    dockerfile_text = (Path(__file__).parents[1] / "Dockerfile").read_text(encoding="utf-8")
+    assert "chown 10001:0 /tmp/luna-codex-home" in dockerfile_text
+    assert "chmod 0770 /tmp/luna-codex-home" in dockerfile_text
