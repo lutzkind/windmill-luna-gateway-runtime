@@ -3,10 +3,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: ["openai-api-server-via-codex", "serve", "--host", "0.0.0.0", "--port", "18080", "--auth-json", "/root/.codex/auth.json", "--max-concurrent-requests", "4", "--max-stored-items", "0", "--timeout", "180"]
+    command: ["uvicorn", "app.codex_upstream:app", "--host", "0.0.0.0", "--port", "18080", "--workers", "1"]
     restart: unless-stopped
     environment:
       CODEX_HOME: /root/.codex
+      CODEX_BINARY: codex
+      CODEX_MAX_CONCURRENCY: "4"
+      CODEX_TIMEOUT_SECONDS: "180"
       OPENAI_VIA_CODEX_API_KEY: internal-codex-sidecar-v1
     volumes:
       - /root/.codex/auth.json:/root/.codex/auth.json:ro
