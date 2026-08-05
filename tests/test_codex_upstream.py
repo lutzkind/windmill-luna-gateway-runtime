@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 from fastapi import HTTPException
@@ -22,6 +23,60 @@ def test_codex_command_forwards_model_and_reasoning_effort():
     assert "-c" in command
     assert 'approval_policy="never"' in command
     assert "--ignore-user-config" in command
+
+
+def test_web_search_command_enables_json_event_capture():
+    command = codex_upstream._build_codex_command(
+        output_path="/tmp/final.txt",
+        model="gpt-5.6-luna",
+        json_events=True,
+    )
+
+    assert "--json" in command
+
+
+def test_web_search_prompt_allows_only_codex_search():
+    prompt = codex_upstream._prompt_from_responses_input(
+        "Find the official source.", web_search=True
+    )
+
+    assert "Use Codex's built-in web search tool" in prompt
+    assert "Do not use shell commands, local files, MCP tools" in prompt
+    assert "Do not use tools." not in prompt
+
+
+def test_web_search_event_parser_and_source_extraction():
+    stdout = "\n".join(
+        [
+            json.dumps({
+                "type": "item.completed",
+                "item": {
+                    "id": "search-1",
+                    "type": "web_search",
+                    "action": {"type": "search", "query": "official source"},
+                },
+            }),
+            json.dumps({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 4, "output_tokens": 5}}),
+        ]
+    )
+    calls, usage, agent_message = codex_upstream._parse_codex_events(stdout)
+    assert calls[0]["type"] == "web_search_call"
+    assert calls[0]["action"]["query"] == "official source"
+    assert usage == {"input_tokens": 10, "cached_input_tokens": 4, "output_tokens": 5}
+    assert agent_message == ""
+
+    sources = codex_upstream._source_records_from_output(
+        json.dumps({
+            "source_url": "https://example.com/source",
+            "source_title": "Source",
+            "source_excerpt": "An exact source excerpt.",
+        })
+    )
+    assert sources == [{
+        "url": "https://example.com/source",
+        "title": "Source",
+        "snippet": "An exact source excerpt.",
+    }]
 
 
 def test_none_reasoning_maps_to_codex_minimal():
@@ -60,7 +115,7 @@ def test_json_object_output_is_repaired_without_passing_invalid_schema(monkeypat
     monkeypatch.setattr(codex_upstream, "_run_codex_once", fake_run)
     result = asyncio.run(codex_upstream._run_codex("return an object", require_json=True))
 
-    assert result == '{"ok":true}'
+    assert result.text == '{"ok":true}'
     assert calls[0][1] is None
     assert calls[0][2] is True
     assert len(calls) == 2

@@ -7,6 +7,7 @@ import shutil
 import tempfile
 import time
 import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,14 @@ TIMEOUT_SECONDS = max(30, int(os.environ.get("CODEX_TIMEOUT_SECONDS", "180")))
 MAX_CONCURRENCY = max(1, int(os.environ.get("CODEX_MAX_CONCURRENCY", "4")))
 SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENCY)
 CODEX_REASONING_EFFORTS = frozenset({"minimal", "low", "medium", "high", "xhigh"})
+WEB_SEARCH_TOOL_TYPES = frozenset({"web_search"})
+
+
+@dataclass
+class CodexRun:
+    text: str
+    web_search_calls: list[dict[str, Any]] = field(default_factory=list)
+    usage: dict[str, int] = field(default_factory=dict)
 
 
 def _authorize(authorization: str | None) -> None:
@@ -55,12 +64,29 @@ def _content_text(content: Any) -> str:
     return ""
 
 
-def _prompt_from_messages(messages: Any) -> str:
+def _web_search_requested(payload: dict[str, Any]) -> bool:
+    tools = payload.get("tools")
+    if not isinstance(tools, list):
+        return False
+    unsupported = [
+        tool.get("type")
+        for tool in tools
+        if isinstance(tool, dict) and tool.get("type") not in WEB_SEARCH_TOOL_TYPES
+    ]
+    if unsupported:
+        raise HTTPException(status_code=400, detail="unsupported_tool")
+    return any(isinstance(tool, dict) and tool.get("type") == "web_search" for tool in tools)
+
+
+WEB_SEARCH_INSTRUCTION = """The caller explicitly requested web search. Use Codex's built-in web search tool before answering.
+Do not use shell commands, local files, MCP tools, or arbitrary network access.
+When returning JSON, include a top-level web_search_sources array when the requested format permits it. Each source must contain url, title, and snippet; snippet must be a verbatim excerpt from the search result that supports the answer. Do not invent source URLs or excerpts."""
+
+
+def _prompt_from_messages(messages: Any, *, web_search: bool = False) -> str:
     if not isinstance(messages, list):
         return ""
-    sections: list[str] = [
-        "Use only the supplied messages. Do not use tools."
-    ]
+    sections: list[str] = [WEB_SEARCH_INSTRUCTION if web_search else "Use only the supplied messages. Do not use tools."]
     for message in messages:
         if not isinstance(message, dict):
             continue
@@ -71,12 +97,12 @@ def _prompt_from_messages(messages: Any) -> str:
     return "\n\n".join(sections)
 
 
-def _prompt_from_responses_input(value: Any) -> str:
+def _prompt_from_responses_input(value: Any, *, web_search: bool = False) -> str:
     if isinstance(value, str):
-        return _prompt_from_messages([{"role": "user", "content": value}])
+        return _prompt_from_messages([{"role": "user", "content": value}], web_search=web_search)
     if isinstance(value, list):
-        return _prompt_from_messages(value)
-    return _prompt_from_messages([{"role": "user", "content": _content_text(value)}])
+        return _prompt_from_messages(value, web_search=web_search)
+    return _prompt_from_messages([{"role": "user", "content": _content_text(value)}], web_search=web_search)
 
 
 def _chat_requires_json(payload: dict[str, Any]) -> bool:
@@ -148,6 +174,7 @@ def _build_codex_command(
     model: str | None = None,
     reasoning_effort: str | None = None,
     schema_path: Path | None = None,
+    json_events: bool = False,
 ) -> list[str]:
     command = [
         CODEX_BINARY,
@@ -164,6 +191,8 @@ def _build_codex_command(
         "--output-last-message",
         output_path,
     ]
+    if json_events:
+        command.append("--json")
     selected_model = str(model or CODEX_MODEL).strip()
     if selected_model:
         command.extend(["--model", selected_model])
@@ -175,6 +204,77 @@ def _build_codex_command(
     return command
 
 
+def _parse_codex_events(stdout_text: str) -> tuple[list[dict[str, Any]], dict[str, int], str]:
+    web_search_calls: list[dict[str, Any]] = []
+    usage: dict[str, int] = {}
+    agent_message = ""
+    for line in stdout_text.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") == "turn.completed" and isinstance(event.get("usage"), dict):
+            usage = {
+                str(key): int(value)
+                for key, value in event["usage"].items()
+                if isinstance(value, (int, float))
+            }
+        if event.get("type") != "item.completed" or not isinstance(event.get("item"), dict):
+            continue
+        item = event["item"]
+        if item.get("type") == "web_search":
+            web_search_calls.append({
+                "id": item.get("id") or f"websearch_{uuid.uuid4().hex}",
+                "type": "web_search_call",
+                "status": "completed",
+                "action": item.get("action") if isinstance(item.get("action"), dict) else {},
+            })
+        elif item.get("type") == "agent_message" and isinstance(item.get("text"), str):
+            agent_message = item["text"]
+    return web_search_calls, usage, agent_message
+
+
+def _source_records_from_output(text: str) -> list[dict[str, str]]:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned
+        cleaned = cleaned.rsplit("```", 1)[0].strip()
+    try:
+        value = json.loads(cleaned)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(value, dict):
+        return []
+
+    candidates: list[Any] = []
+    for key in ("web_search_sources", "sources", "citations"):
+        if isinstance(value.get(key), list):
+            candidates.extend(value[key])
+    if value.get("source_url"):
+        candidates.append(value)
+
+    records: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        url = str(candidate.get("url") or candidate.get("source_url") or "").strip()
+        title = str(candidate.get("title") or candidate.get("source_title") or "").strip()
+        snippet = str(
+            candidate.get("snippet")
+            or candidate.get("source_excerpt")
+            or candidate.get("excerpt")
+            or ""
+        ).strip()
+        if not (url.startswith("https://") or url.startswith("http://")) or not title or not snippet:
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        records.append({"url": url[:2000], "title": title[:1000], "snippet": snippet[:5000]})
+    return records[:20]
+
+
 async def _run_codex_once(
     prompt: str,
     schema: dict[str, Any] | None,
@@ -182,7 +282,8 @@ async def _run_codex_once(
     *,
     model: str | None = None,
     reasoning_effort: str | None = None,
-) -> str:
+    web_search: bool = False,
+) -> CodexRun:
     _prepare_runtime_home()
     with tempfile.TemporaryDirectory(prefix="luna-codex-") as tmp_dir:
         tmp_path = Path(tmp_dir)
@@ -203,6 +304,7 @@ async def _run_codex_once(
             model=model,
             reasoning_effort=reasoning_effort,
             schema_path=schema_path,
+            json_events=web_search,
         )
         print(json.dumps({
             "event": "codex_invocation",
@@ -236,13 +338,23 @@ async def _run_codex_once(
 
         stdout_text = stdout.decode("utf-8", errors="replace").strip()
         error_text = stderr.decode("utf-8", errors="replace").strip()
-        output = output_path.read_text(encoding="utf-8").strip() if output_path.is_file() else stdout_text
+        web_search_calls, usage, agent_message = _parse_codex_events(stdout_text) if web_search else ([], {}, "")
+        output = output_path.read_text(encoding="utf-8").strip() if output_path.is_file() else agent_message or stdout_text
         if process.returncode != 0:
             detail = error_text[-1200:] or stdout_text[-1200:] or f"codex exited {process.returncode}"
             raise HTTPException(status_code=502, detail=detail)
         if not output:
             raise HTTPException(status_code=502, detail="codex returned an empty response")
-        return output
+        if web_search and not web_search_calls:
+            raise HTTPException(status_code=502, detail="codex did not execute the requested web search")
+        sources = _source_records_from_output(output) if web_search else []
+        for call in web_search_calls:
+            call["results"] = sources
+        return CodexRun(text=output, web_search_calls=web_search_calls, usage=usage)
+
+
+def _as_codex_run(value: CodexRun | str) -> CodexRun:
+    return value if isinstance(value, CodexRun) else CodexRun(text=str(value))
 
 
 async def _run_codex(
@@ -252,45 +364,49 @@ async def _run_codex(
     *,
     model: str | None = None,
     reasoning_effort: str | None = None,
-) -> str:
+    web_search: bool = False,
+) -> CodexRun:
     if not prompt.strip():
         raise HTTPException(status_code=400, detail="empty prompt")
     if shutil.which(CODEX_BINARY) is None:
         raise HTTPException(status_code=503, detail="codex binary unavailable")
 
     async with SEMAPHORE:
-        output = await _run_codex_once(
+        output = _as_codex_run(await _run_codex_once(
             prompt,
             schema,
             require_json,
             model=model,
             reasoning_effort=reasoning_effort,
-        )
+            web_search=web_search,
+        ))
         if not require_json:
             return output
         try:
-            parsed = json.loads(output)
+            parsed = json.loads(output.text)
         except json.JSONDecodeError:
             schema_instruction = " satisfying the supplied schema" if schema is not None else ""
             repair_prompt = (
                 "The prior attempt was not valid JSON. Redo the original task from scratch and return exactly one "
                 f"valid JSON object{schema_instruction}. No markdown or surrounding prose.\n\n"
-                f"ORIGINAL TASK:\n{prompt}\n\nINVALID PRIOR OUTPUT:\n{output[:6000]}"
+                f"ORIGINAL TASK:\n{prompt}\n\nINVALID PRIOR OUTPUT:\n{output.text[:6000]}"
             )
-            output = await _run_codex_once(
+            output = _as_codex_run(await _run_codex_once(
                 repair_prompt,
                 schema,
                 True,
                 model=model,
                 reasoning_effort=reasoning_effort,
-            )
+                web_search=web_search,
+            ))
             try:
-                parsed = json.loads(output)
+                parsed = json.loads(output.text)
             except json.JSONDecodeError as exc:
                 raise HTTPException(status_code=502, detail=f"codex returned invalid structured output: {exc.msg}")
         if not isinstance(parsed, dict):
             raise HTTPException(status_code=502, detail="codex structured output was not a JSON object")
-        return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+        output.text = json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+        return output
 
 
 @app.get("/healthz")
@@ -304,6 +420,7 @@ async def healthz() -> dict[str, Any]:
         "mcp_tools_loaded": False,
         "reasoning_forwarding": True,
         "model_forwarding": True,
+        "web_search_forwarding": True,
         "sandbox": "read-only",
     }
 
@@ -318,20 +435,27 @@ async def models(authorization: str | None = Header(default=None)) -> dict[str, 
 async def chat_completions(payload: dict[str, Any], authorization: str | None = Header(default=None)) -> dict[str, Any]:
     _authorize(authorization)
     requested_model = str(payload.get("model") or "gpt-5.6-luna")
-    output = await _run_codex(
-        _prompt_from_messages(payload.get("messages")),
+    web_search = _web_search_requested(payload)
+    run = await _run_codex(
+        _prompt_from_messages(payload.get("messages"), web_search=web_search),
         _chat_schema(payload),
         _chat_requires_json(payload),
         model=requested_model,
         reasoning_effort=payload.get("reasoning_effort"),
+        web_search=web_search,
     )
     return {
         "id": f"chatcmpl_{uuid.uuid4().hex}",
         "object": "chat.completion",
         "created": int(time.time()),
         "model": requested_model,
-        "choices": [{"index": 0, "message": {"role": "assistant", "content": output}, "finish_reason": "stop"}],
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": run.text}, "finish_reason": "stop"}],
+        "usage": {
+            "prompt_tokens": run.usage.get("input_tokens", 0),
+            "completion_tokens": run.usage.get("output_tokens", 0),
+            "total_tokens": run.usage.get("input_tokens", 0) + run.usage.get("output_tokens", 0),
+            "prompt_tokens_details": {"cached_tokens": run.usage.get("cached_input_tokens", 0)},
+        },
     }
 
 
@@ -339,14 +463,16 @@ async def chat_completions(payload: dict[str, Any], authorization: str | None = 
 async def responses(payload: dict[str, Any], authorization: str | None = Header(default=None)) -> dict[str, Any]:
     _authorize(authorization)
     requested_model = str(payload.get("model") or "gpt-5.6-luna")
-    output = await _run_codex(
-        _prompt_from_responses_input(payload.get("input")),
+    web_search = _web_search_requested(payload)
+    run = await _run_codex(
+        _prompt_from_responses_input(payload.get("input"), web_search=web_search),
         _responses_schema(payload),
         _responses_requires_json(payload),
         model=requested_model,
         reasoning_effort=(payload.get("reasoning") or {}).get("effort")
         if isinstance(payload.get("reasoning"), dict)
         else None,
+        web_search=web_search,
     )
     response_id = f"resp_{uuid.uuid4().hex}"
     return {
@@ -355,13 +481,21 @@ async def responses(payload: dict[str, Any], authorization: str | None = Header(
         "created_at": int(time.time()),
         "status": "completed",
         "model": requested_model,
-        "output_text": output,
-        "output": [{
+        "output_text": run.text,
+        "output": [*run.web_search_calls, {
             "id": f"msg_{uuid.uuid4().hex}",
             "type": "message",
             "status": "completed",
             "role": "assistant",
-            "content": [{"type": "output_text", "text": output, "annotations": []}],
+            "content": [{"type": "output_text", "text": run.text, "annotations": [
+                {"type": "url_citation", "url": result["url"], "title": result["title"], "start_index": 0, "end_index": 0}
+                for call in run.web_search_calls for result in call.get("results", [])
+            ]}],
         }],
-        "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+        "usage": {
+            "input_tokens": run.usage.get("input_tokens", 0),
+            "output_tokens": run.usage.get("output_tokens", 0),
+            "total_tokens": run.usage.get("input_tokens", 0) + run.usage.get("output_tokens", 0),
+            "input_tokens_details": {"cached_tokens": run.usage.get("cached_input_tokens", 0)},
+        },
     }
