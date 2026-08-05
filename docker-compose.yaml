@@ -12,7 +12,8 @@ services:
       CODEX_TIMEOUT_SECONDS: "180"
       OPENAI_VIA_CODEX_API_KEY: internal-codex-sidecar-v1
     volumes:
-      - /root/.codex/auth.json:/root/.codex/auth.json:ro
+      # Keep the gateway's ChatGPT/Codex account separate from the host Codex session.
+      - /root/.codex-gateway/auth.json:/root/.codex/auth.json:ro
     expose: ["18080"]
     networks: [gateway-private]
     healthcheck:
