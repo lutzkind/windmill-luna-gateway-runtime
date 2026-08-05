@@ -97,12 +97,22 @@ def _prompt_from_messages(messages: Any, *, web_search: bool = False) -> str:
     return "\n\n".join(sections)
 
 
-def _prompt_from_responses_input(value: Any, *, web_search: bool = False) -> str:
-    if isinstance(value, str):
-        return _prompt_from_messages([{"role": "user", "content": value}], web_search=web_search)
-    if isinstance(value, list):
-        return _prompt_from_messages(value, web_search=web_search)
-    return _prompt_from_messages([{"role": "user", "content": _content_text(value)}], web_search=web_search)
+def _prompt_from_responses_input(
+    value: Any, *, instructions: Any = None, web_search: bool = False
+) -> str:
+    sections: list[str] = [WEB_SEARCH_INSTRUCTION if web_search else "Use only the supplied messages. Do not use tools."]
+    instruction_text = _content_text(instructions)
+    if instruction_text:
+        sections.append(f"<INSTRUCTIONS>\n{instruction_text}\n</INSTRUCTIONS>")
+    messages = value if isinstance(value, list) else [{"role": "user", "content": value}]
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "user").upper()
+        text = _content_text(message.get("content"))
+        if text:
+            sections.append(f"<{role}>\n{text}\n</{role}>")
+    return "\n\n".join(sections)
 
 
 def _chat_requires_json(payload: dict[str, Any]) -> bool:
@@ -465,7 +475,11 @@ async def responses(payload: dict[str, Any], authorization: str | None = Header(
     requested_model = str(payload.get("model") or "gpt-5.6-luna")
     web_search = _web_search_requested(payload)
     run = await _run_codex(
-        _prompt_from_responses_input(payload.get("input"), web_search=web_search),
+        _prompt_from_responses_input(
+            payload.get("input"),
+            instructions=payload.get("instructions"),
+            web_search=web_search,
+        ),
         _responses_schema(payload),
         _responses_requires_json(payload),
         model=requested_model,

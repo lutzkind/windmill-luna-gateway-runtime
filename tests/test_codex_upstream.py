@@ -37,11 +37,15 @@ def test_web_search_command_enables_json_event_capture():
 
 def test_web_search_prompt_allows_only_codex_search():
     prompt = codex_upstream._prompt_from_responses_input(
-        "Find the official source.", web_search=True
+        "Find the official source.",
+        instructions="Return JSON with a Topics array.",
+        web_search=True,
     )
 
     assert "Use Codex's built-in web search tool" in prompt
     assert "Do not use shell commands, local files, MCP tools" in prompt
+    assert "<INSTRUCTIONS>\nReturn JSON with a Topics array.\n</INSTRUCTIONS>" in prompt
+    assert "<USER>\nFind the official source.\n</USER>" in prompt
     assert "Do not use tools." not in prompt
 
 
