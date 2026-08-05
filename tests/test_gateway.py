@@ -75,24 +75,20 @@ def test_missing_or_unknown_bearer_is_rejected():
         assert client.post("/v1/chat/completions", headers=headers("wrong"), json=payload()).status_code == 401
 
 
-def test_quota_fallback_and_circuit_use_caller_key():
+def test_quota_failure_does_not_send_caller_key_to_direct_api():
     seen = []
     def handler(request):
         seen.append((str(request.url), request.headers.get("authorization")))
-        if request.url.host == "codex.test":
-            return httpx.Response(429, json={"error": {"message": "Codex usage limit reached"}})
-        return httpx.Response(200, json=success("fallback"))
+        return httpx.Response(429, json={"error": {"message": "Codex usage limit reached"}})
     with client_for(handler) as client:
         first = client.post("/v1/chat/completions", headers=headers(), json=payload())
         second = client.post("/v1/chat/completions", headers=headers(), json=payload())
-    assert first.headers["x-luna-gateway-provider"] == "openai-api"
+    assert first.status_code == 502
+    assert first.headers["x-luna-gateway-provider"] == "none"
     assert first.headers["x-luna-gateway-fallback-reason"] == "quota"
+    assert second.status_code == 502
     assert second.headers["x-luna-gateway-fallback-reason"].startswith("circuit_open:quota")
-    assert seen == [
-        ("https://codex.test/v1/chat/completions", "Bearer internal-codex-sidecar-v1"),
-        ("https://api.test/v1/chat/completions", f"Bearer {CALLER_KEY}"),
-        ("https://api.test/v1/chat/completions", f"Bearer {CALLER_KEY}"),
-    ]
+    assert seen == [("https://codex.test/v1/chat/completions", "Bearer internal-codex-sidecar-v1")]
 
 
 def test_forced_fallback_requires_test_controls():
@@ -103,8 +99,8 @@ def test_forced_fallback_requires_test_controls():
     assert disabled.status_code == 403
     with client_for(handler, enable_test_controls=True) as client:
         enabled = client.post("/v1/chat/completions", headers=headers(force="quota"), json=payload())
-    assert enabled.status_code == 200
-    assert enabled.headers["x-luna-gateway-provider"] == "openai-api"
+        assert enabled.status_code == 502
+    assert enabled.headers["x-luna-gateway-provider"] == "none"
     assert enabled.headers["x-luna-gateway-fallback-reason"] == "forced_test:quota"
 
 
@@ -129,7 +125,8 @@ def test_invalid_json_success_falls_back():
     request_payload["response_format"] = {"type": "json_object"}
     with client_for(handler) as client:
         response = client.post("/v1/chat/completions", headers=headers(), json=request_payload)
-    assert response.headers["x-luna-gateway-provider"] == "openai-api"
+    assert response.status_code == 502
+    assert response.headers["x-luna-gateway-provider"] == "none"
     assert response.headers["x-luna-gateway-fallback-reason"] == "invalid_success"
 
 
@@ -171,15 +168,14 @@ def test_api_only_model_and_media_passthrough():
         model_response = client.post("/v1/chat/completions", headers=headers(), json={"model": "gpt-5-mini", "messages": []})
         speech_response = client.post("/v1/audio/speech", headers={**headers(), "Content-Type": "application/json"}, content=b'{"model":"gpt-4o-mini-tts","input":"hi"}')
         blocked = client.post("/v1/files", headers=headers(), content=b"x")
-    assert model_response.status_code == 200
-    assert model_response.headers["x-luna-gateway-provider"] == "openai-api"
-    assert model_response.headers["x-luna-gateway-fallback"] == "false"
+    assert model_response.status_code == 502
+    assert model_response.headers["x-luna-gateway-provider"] == "none"
+    assert model_response.headers["x-luna-gateway-fallback"] == "true"
     assert speech_response.status_code == 200
     assert speech_response.content == b"audio-bytes"
     assert speech_response.headers["content-type"].startswith("audio/mpeg")
     assert blocked.status_code == 404
-    assert seen[0][0] == "https://api.test/v1/chat/completions"
-    assert seen[1][0] == "https://api.test/v1/audio/speech"
+    assert seen[0][0] == "https://api.test/v1/audio/speech"
     assert all(item[1] == f"Bearer {CALLER_KEY}" for item in seen)
 
 
@@ -277,17 +273,16 @@ def test_quota_fallback_preserves_reasoning_effort():
                 429,
                 json={"error": {"message": "Codex usage limit reached"}},
             )
-        return httpx.Response(200, json=success("fallback"))
+        return httpx.Response(429, json={"error": {"message": "Codex usage limit reached"}})
 
     with client_for(handler) as client:
         response = client.post(
             "/v1/chat/completions", headers=headers(), json=payload()
         )
 
-    assert response.status_code == 200
-    assert response.headers["x-luna-gateway-provider"] == "openai-api"
+    assert response.status_code == 502
+    assert response.headers["x-luna-gateway-provider"] == "none"
     assert seen[0][1]["reasoning_effort"] == "low"
-    assert seen[1][1]["reasoning_effort"] == "low"
 
 
 def test_invalid_explicit_reasoning_is_rejected():
