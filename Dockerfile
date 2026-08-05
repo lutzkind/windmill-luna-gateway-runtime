@@ -1,11 +1,12 @@
-FROM python:3.12-slim
+FROM 127.0.0.1:5000/luxeillum/codex-executor-runtime:aa0d84548a5d03c66dd110be6455ada2ce837537
 
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 
 EXPOSE 8080
