@@ -812,8 +812,18 @@ def require_gateway_auth(request: Request, settings: Settings) -> None:
 def fallback_api_key(request: Request, settings: Settings) -> str:
     authorization = request.headers.get("authorization", "")
     scheme, _, token = authorization.partition(" ")
-    if scheme.lower() == "bearer" and token.strip():
-        return token.strip()
+    supplied = token.strip() if scheme.lower() == "bearer" else ""
+    if supplied:
+        fingerprint = hashlib.sha256(supplied.encode("utf-8")).hexdigest()
+        # Windmill's shared proxy resource uses an internal gateway bearer,
+        # not an OpenAI API key. API-only passthroughs such as audio/speech
+        # must use the gateway's server-side OpenAI fallback credential.
+        if (
+            settings.server_openai_api_key
+            and any(hmac.compare_digest(fingerprint, allowed) for allowed in settings.allowed_api_key_sha256s)
+        ):
+            return settings.server_openai_api_key
+        return supplied
     return settings.server_openai_api_key
 
 

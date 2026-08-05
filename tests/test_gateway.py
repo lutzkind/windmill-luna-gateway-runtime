@@ -179,6 +179,24 @@ def test_api_only_model_and_media_passthrough():
     assert all(item[1] == f"Bearer {CALLER_KEY}" for item in seen)
 
 
+def test_internal_windmill_bearer_uses_server_key_for_api_only_media():
+    seen = []
+
+    def handler(request):
+        seen.append(request.headers.get("authorization"))
+        return httpx.Response(200, content=b"audio-bytes", headers={"content-type": "audio/mpeg"})
+
+    with client_for(handler, server_openai_api_key="server-api-secret") as client:
+        response = client.post(
+            "/v1/audio/speech",
+            headers={**headers(), "Content-Type": "application/json"},
+            content=b'{"model":"gpt-4o-mini-tts","input":"hi"}',
+        )
+
+    assert response.status_code == 200
+    assert seen == ["Bearer server-api-secret"]
+
+
 def test_streaming_size_guards_and_health():
     def handler(request):
         raise AssertionError("provider called")
