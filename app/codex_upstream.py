@@ -1,23 +1,28 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shutil
+import tempfile
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException
 
-app = FastAPI(title="Codex CLI OpenAI-compatible upstream", version="1.0.0")
+app = FastAPI(title="Codex CLI OpenAI-compatible upstream", version="1.1.0")
 
 API_KEY = os.environ.get("OPENAI_VIA_CODEX_API_KEY", "").strip()
 CODEX_BINARY = os.environ.get("CODEX_BINARY", "codex").strip() or "codex"
 CODEX_MODEL = os.environ.get("CODEX_MODEL", "").strip()
-CODEX_HOME = os.environ.get("CODEX_HOME", "/root/.codex").strip() or "/root/.codex"
+SOURCE_CODEX_HOME = Path(os.environ.get("CODEX_HOME", "/root/.codex").strip() or "/root/.codex")
+RUNTIME_CODEX_HOME = Path(os.environ.get("LUNA_CODEX_HOME", "/tmp/luna-codex-home").strip() or "/tmp/luna-codex-home")
 TIMEOUT_SECONDS = max(30, int(os.environ.get("CODEX_TIMEOUT_SECONDS", "180")))
 MAX_CONCURRENCY = max(1, int(os.environ.get("CODEX_MAX_CONCURRENCY", "4")))
 SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENCY)
+JSON_OBJECT_SCHEMA: dict[str, Any] = {"type": "object", "additionalProperties": True}
 
 
 def _authorize(authorization: str | None) -> None:
@@ -50,7 +55,7 @@ def _prompt_from_messages(messages: Any) -> str:
     if not isinstance(messages, list):
         return ""
     sections: list[str] = [
-        "Complete this bounded language task without using shell, filesystem, network, or other tools. "
+        "Complete this bounded language task without using shell, filesystem, network, MCP, or other tools. "
         "Use only the supplied messages. Return only the final requested answer."
     ]
     for message in messages:
@@ -71,37 +76,89 @@ def _prompt_from_responses_input(value: Any) -> str:
     return _prompt_from_messages([{"role": "user", "content": _content_text(value)}])
 
 
-async def _run_codex(prompt: str) -> str:
-    if not prompt.strip():
-        raise HTTPException(status_code=400, detail="empty prompt")
-    if shutil.which(CODEX_BINARY) is None:
-        raise HTTPException(status_code=503, detail="codex binary unavailable")
+def _chat_schema(payload: dict[str, Any]) -> dict[str, Any] | None:
+    fmt = payload.get("response_format")
+    if not isinstance(fmt, dict):
+        return None
+    fmt_type = str(fmt.get("type") or "").strip().lower()
+    if fmt_type == "json_object":
+        return JSON_OBJECT_SCHEMA
+    if fmt_type == "json_schema":
+        wrapper = fmt.get("json_schema")
+        if isinstance(wrapper, dict) and isinstance(wrapper.get("schema"), dict):
+            return wrapper["schema"]
+        if isinstance(fmt.get("schema"), dict):
+            return fmt["schema"]
+    return None
 
-    command = [
-        CODEX_BINARY,
-        "exec",
-        "--ephemeral",
-        "--skip-git-repo-check",
-        "--sandbox",
-        "read-only",
-        "--color",
-        "never",
-    ]
-    if CODEX_MODEL:
-        command.extend(["--model", CODEX_MODEL])
 
-    env = os.environ.copy()
-    env["CODEX_HOME"] = CODEX_HOME
-    env.pop("OPENAI_API_KEY", None)
+def _responses_schema(payload: dict[str, Any]) -> dict[str, Any] | None:
+    text = payload.get("text")
+    fmt = text.get("format") if isinstance(text, dict) else None
+    if not isinstance(fmt, dict):
+        return None
+    fmt_type = str(fmt.get("type") or "").strip().lower()
+    if fmt_type in {"json_object", "json"}:
+        return JSON_OBJECT_SCHEMA
+    if fmt_type == "json_schema":
+        if isinstance(fmt.get("schema"), dict):
+            return fmt["schema"]
+        wrapper = fmt.get("json_schema")
+        if isinstance(wrapper, dict) and isinstance(wrapper.get("schema"), dict):
+            return wrapper["schema"]
+    return None
 
-    async with SEMAPHORE:
+
+def _prepare_runtime_home() -> None:
+    source_auth = SOURCE_CODEX_HOME / "auth.json"
+    if not source_auth.is_file():
+        raise HTTPException(status_code=503, detail="codex authentication is unavailable")
+    RUNTIME_CODEX_HOME.mkdir(parents=True, exist_ok=True)
+    target_auth = RUNTIME_CODEX_HOME / "auth.json"
+    shutil.copy2(source_auth, target_auth)
+    target_auth.chmod(0o600)
+    # Intentionally do not copy config.toml. Luna completion jobs must not load MCP tools.
+
+
+async def _run_codex_once(prompt: str, schema: dict[str, Any] | None) -> str:
+    _prepare_runtime_home()
+    with tempfile.TemporaryDirectory(prefix="luna-codex-") as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        output_path = tmp_path / "final.txt"
+        command = [
+            CODEX_BINARY,
+            "exec",
+            "--ephemeral",
+            "--skip-git-repo-check",
+            "--sandbox",
+            "read-only",
+            "--color",
+            "never",
+            "--output-last-message",
+            str(output_path),
+        ]
+        if CODEX_MODEL:
+            command.extend(["--model", CODEX_MODEL])
+        if schema is not None:
+            schema_path = tmp_path / "schema.json"
+            schema_path.write_text(json.dumps(schema, ensure_ascii=False), encoding="utf-8")
+            command.extend(["--output-schema", str(schema_path)])
+            prompt = (
+                "Your final response must be one strict JSON object satisfying the supplied schema. "
+                "Do not return markdown, prose outside the object, or code fences.\n\n" + prompt
+            )
+
+        env = os.environ.copy()
+        env["CODEX_HOME"] = str(RUNTIME_CODEX_HOME)
+        env.pop("OPENAI_API_KEY", None)
+
         process = await asyncio.create_subprocess_exec(
             *command,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
-            cwd="/tmp",
+            cwd=tmp_dir,
         )
         try:
             stdout, stderr = await asyncio.wait_for(
@@ -113,23 +170,54 @@ async def _run_codex(prompt: str) -> str:
             await process.communicate()
             raise HTTPException(status_code=504, detail="codex execution timed out")
 
-    output = stdout.decode("utf-8", errors="replace").strip()
-    error_text = stderr.decode("utf-8", errors="replace").strip()
-    if process.returncode != 0:
-        detail = error_text[-1200:] or output[-1200:] or f"codex exited {process.returncode}"
-        raise HTTPException(status_code=502, detail=detail)
-    if not output:
-        raise HTTPException(status_code=502, detail="codex returned an empty response")
-    return output
+        stdout_text = stdout.decode("utf-8", errors="replace").strip()
+        error_text = stderr.decode("utf-8", errors="replace").strip()
+        output = output_path.read_text(encoding="utf-8").strip() if output_path.is_file() else stdout_text
+        if process.returncode != 0:
+            detail = error_text[-1200:] or stdout_text[-1200:] or f"codex exited {process.returncode}"
+            raise HTTPException(status_code=502, detail=detail)
+        if not output:
+            raise HTTPException(status_code=502, detail="codex returned an empty response")
+        return output
+
+
+async def _run_codex(prompt: str, schema: dict[str, Any] | None = None) -> str:
+    if not prompt.strip():
+        raise HTTPException(status_code=400, detail="empty prompt")
+    if shutil.which(CODEX_BINARY) is None:
+        raise HTTPException(status_code=503, detail="codex binary unavailable")
+
+    async with SEMAPHORE:
+        output = await _run_codex_once(prompt, schema)
+        if schema is None:
+            return output
+        try:
+            parsed = json.loads(output)
+        except json.JSONDecodeError:
+            repair_prompt = (
+                "The prior attempt was not valid JSON. Redo the original task from scratch and return exactly one "
+                "valid JSON object satisfying the supplied schema. No markdown or surrounding prose.\n\n"
+                f"ORIGINAL TASK:\n{prompt}\n\nINVALID PRIOR OUTPUT:\n{output[:6000]}"
+            )
+            output = await _run_codex_once(repair_prompt, schema)
+            try:
+                parsed = json.loads(output)
+            except json.JSONDecodeError as exc:
+                raise HTTPException(status_code=502, detail=f"codex returned invalid structured output: {exc.msg}")
+        if not isinstance(parsed, dict):
+            raise HTTPException(status_code=502, detail="codex structured output was not a JSON object")
+        return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
 
 
 @app.get("/healthz")
 async def healthz() -> dict[str, Any]:
     return {
-        "ok": shutil.which(CODEX_BINARY) is not None and os.path.isfile(os.path.join(CODEX_HOME, "auth.json")),
+        "ok": shutil.which(CODEX_BINARY) is not None and (SOURCE_CODEX_HOME / "auth.json").is_file(),
         "provider": "official-codex-cli",
         "binary": CODEX_BINARY,
         "max_concurrency": MAX_CONCURRENCY,
+        "structured_output": True,
+        "mcp_tools_loaded": False,
     }
 
 
@@ -143,7 +231,7 @@ async def models(authorization: str | None = Header(default=None)) -> dict[str, 
 async def chat_completions(payload: dict[str, Any], authorization: str | None = Header(default=None)) -> dict[str, Any]:
     _authorize(authorization)
     requested_model = str(payload.get("model") or "gpt-5.6-luna")
-    output = await _run_codex(_prompt_from_messages(payload.get("messages")))
+    output = await _run_codex(_prompt_from_messages(payload.get("messages")), _chat_schema(payload))
     return {
         "id": f"chatcmpl_{uuid.uuid4().hex}",
         "object": "chat.completion",
@@ -158,7 +246,7 @@ async def chat_completions(payload: dict[str, Any], authorization: str | None = 
 async def responses(payload: dict[str, Any], authorization: str | None = Header(default=None)) -> dict[str, Any]:
     _authorize(authorization)
     requested_model = str(payload.get("model") or "gpt-5.6-luna")
-    output = await _run_codex(_prompt_from_responses_input(payload.get("input")))
+    output = await _run_codex(_prompt_from_responses_input(payload.get("input")), _responses_schema(payload))
     response_id = f"resp_{uuid.uuid4().hex}"
     return {
         "id": response_id,
