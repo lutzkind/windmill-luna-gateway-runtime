@@ -27,6 +27,7 @@ API_PASSTHROUGH_METHODS: dict[str, frozenset[str]] = {
     "models": frozenset({"GET"}),
 }
 MAX_PASSTHROUGH_BODY_BYTES = 50 * 1024 * 1024
+DEFAULT_MAX_BODY_BYTES = 16 * 1024 * 1024
 REASONING_EFFORTS = frozenset({"none", "low", "medium", "high"})
 HIGH_REASONING_MARKERS = (
     "learning optimizer",
@@ -124,7 +125,7 @@ class Settings:
                 os.getenv("PROVIDER_TIMEOUT_SECONDS", "180")
             ),
             max_body_bytes=int(
-                os.getenv("MAX_BODY_BYTES", str(2 * 1024 * 1024))
+                os.getenv("MAX_BODY_BYTES", str(DEFAULT_MAX_BODY_BYTES))
             ),
             max_concurrency=max(
                 1, int(os.getenv("MAX_CONCURRENCY", "4"))
@@ -876,6 +877,7 @@ def create_app(
             "gateway_configured": bool(selected.allowed_api_key_sha256s),
             "windmill_caller_allowed": "f777774c7a4100fc25022f34d27483a9080679aed01a0fca54ced407ca09df9f" in selected.allowed_api_key_sha256s,
             "allowed_caller_count": len(selected.allowed_api_key_sha256s),
+            "max_body_bytes": selected.max_body_bytes,
             "codex_configured": bool(selected.codex_api_key),
             "api_fallback": (
                 "caller_bearer_or_server"

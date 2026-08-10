@@ -212,6 +212,12 @@ def test_streaming_size_guards_and_health():
     assert health["test_controls"] is True
 
 
+def test_default_model_body_limit_supports_multimodal_requests(monkeypatch):
+    monkeypatch.delenv("MAX_BODY_BYTES", raising=False)
+    settings = Settings.from_env()
+    assert settings.max_body_bytes == 16 * 1024 * 1024
+
+
 def test_adaptive_reasoning_levels_and_explicit_override():
     seen = []
 

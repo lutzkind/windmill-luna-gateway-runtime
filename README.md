@@ -22,5 +22,7 @@ Windmill sends its existing OpenAI API key as `Authorization: Bearer ...`. The g
 The Codex upstream health response exposes `image_input_forwarding`, the transport
 (`codex_exec_image_flags`), and the bounded image count/size limits. Image URLs are
 accepted only over HTTP(S); data URLs must be base64-encoded raster images.
+The gateway accepts multimodal JSON bodies up to 16 MiB by default; the larger
+passthrough limit does not apply to model completion requests.
 
 `ENABLE_TEST_CONTROLS` is enabled only for live fallback verification and is disabled immediately afterward.
