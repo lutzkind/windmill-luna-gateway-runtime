@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -23,6 +25,68 @@ def test_codex_command_forwards_model_and_reasoning_effort():
     assert "-c" in command
     assert 'approval_policy="never"' in command
     assert "--ignore-user-config" in command
+
+
+def test_codex_command_forwards_image_paths():
+    command = codex_upstream._build_codex_command(
+        output_path="/tmp/final.txt",
+        model="gpt-5.6-luna",
+        image_paths=[Path("/tmp/source.jpg"), Path("/tmp/card.png")],
+    )
+
+    assert command[command.index("--image") + 1] == "/tmp/source.jpg"
+    assert command[command.index("--image", command.index("--image") + 1) + 1] == "/tmp/card.png"
+
+
+def test_chat_prompt_preserves_image_inputs():
+    image_url = "data:image/jpeg;base64," + base64.b64encode(b"fake-image").decode()
+    prompt, images = codex_upstream._prompt_and_images_from_messages(
+        [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Inspect the card."},
+                {"type": "image_url", "image_url": {"url": image_url, "detail": "auto"}},
+            ],
+        }]
+    )
+
+    assert images == [image_url]
+    assert "Inspect the card." in prompt
+    assert "Image attachment 1 is supplied" in prompt
+
+
+def test_responses_prompt_preserves_input_images():
+    image_url = "data:image/png;base64," + base64.b64encode(b"fake-image").decode()
+    prompt, images = codex_upstream._prompt_and_images_from_responses_input(
+        [{
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Inspect the artwork."},
+                {"type": "input_image", "image_url": image_url},
+            ],
+        }]
+    )
+
+    assert images == [image_url]
+    assert "Inspect the artwork." in prompt
+    assert "Image attachment 1 is supplied" in prompt
+
+
+def test_data_image_is_materialized_with_safe_extension(tmp_path: Path):
+    image_url = "data:image/jpeg;base64," + base64.b64encode(b"jpeg-bytes").decode()
+    paths = asyncio.run(codex_upstream._materialize_image_inputs([image_url], tmp_path))
+
+    assert paths == [tmp_path / "input-image-1.jpg"]
+    assert paths[0].read_bytes() == b"jpeg-bytes"
+
+
+def test_image_input_limit_is_bounded():
+    image_url = "data:image/jpeg;base64," + base64.b64encode(b"x").decode()
+    with pytest.raises(HTTPException, match="too_many_image_inputs"):
+        asyncio.run(codex_upstream._materialize_image_inputs(
+            [image_url] * (codex_upstream.MAX_IMAGE_INPUTS + 1),
+            Path("/tmp"),
+        ))
 
 
 def test_web_search_command_enables_json_event_capture():

@@ -1,19 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import os
 import shutil
 import tempfile
 import time
+from urllib.parse import urlparse
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, Header, HTTPException
 
-app = FastAPI(title="Codex CLI OpenAI-compatible upstream", version="1.2.0")
+app = FastAPI(title="Codex CLI OpenAI-compatible upstream", version="1.3.0")
 
 API_KEY = os.environ.get("OPENAI_VIA_CODEX_API_KEY", "").strip()
 CODEX_BINARY = os.environ.get("CODEX_BINARY", "codex").strip() or "codex"
@@ -29,6 +33,22 @@ MAX_CONCURRENCY = max(1, int(os.environ.get("CODEX_MAX_CONCURRENCY", "4")))
 SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENCY)
 CODEX_REASONING_EFFORTS = frozenset({"minimal", "low", "medium", "high", "xhigh"})
 WEB_SEARCH_TOOL_TYPES = frozenset({"web_search"})
+MAX_IMAGE_INPUTS = max(1, min(8, int(os.environ.get("CODEX_MAX_IMAGE_INPUTS", "8"))))
+MAX_IMAGE_BYTES = max(1_048_576, min(20 * 1024 * 1024, int(os.environ.get("CODEX_MAX_IMAGE_BYTES", str(15 * 1024 * 1024)))))
+IMAGE_FETCH_TIMEOUT_SECONDS = max(5.0, min(60.0, float(os.environ.get("CODEX_IMAGE_FETCH_TIMEOUT_SECONDS", "30"))))
+IMAGE_MIME_SUFFIXES = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+}
+IMAGE_MAGIC_TYPES = (
+    (b"\xff\xd8\xff", "image/jpeg", ".jpg"),
+    (b"\x89PNG\r\n\x1a\n", "image/png", ".png"),
+    (b"RIFF", "image/webp", ".webp"),
+    (b"GIF87a", "image/gif", ".gif"),
+    (b"GIF89a", "image/gif", ".gif"),
+)
 
 
 @dataclass
@@ -45,11 +65,26 @@ def _authorize(authorization: str | None) -> None:
         raise HTTPException(status_code=401, detail="unauthorized")
 
 
-def _content_text(content: Any) -> str:
+def _image_source_from_part(item: dict[str, Any]) -> str | None:
+    item_type = str(item.get("type") or "").strip().lower()
+    if item_type not in {"image_url", "input_image"}:
+        return None
+    value: Any = item.get("image_url") or item.get("url") or item.get("file_url")
+    if isinstance(value, dict):
+        value = value.get("url") or value.get("image_url") or value.get("uri")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    if item_type == "input_image" and item.get("file_id"):
+        raise HTTPException(status_code=400, detail="file_id image inputs are unsupported; provide image_url")
+    return None
+
+
+def _content_text_and_images(content: Any) -> tuple[str, list[str]]:
     if isinstance(content, str):
-        return content
+        return content, []
     if isinstance(content, list):
         parts: list[str] = []
+        images: list[str] = []
         for item in content:
             if isinstance(item, str):
                 parts.append(item)
@@ -57,11 +92,19 @@ def _content_text(content: Any) -> str:
                 text = item.get("text") or item.get("input_text") or item.get("content")
                 if isinstance(text, str):
                     parts.append(text)
-        return "\n".join(part for part in parts if part)
+                image_source = _image_source_from_part(item)
+                if image_source:
+                    images.append(image_source)
+        return "\n".join(part for part in parts if part), images
     if isinstance(content, dict):
         text = content.get("text") or content.get("input_text") or content.get("content")
-        return text if isinstance(text, str) else ""
-    return ""
+        image_source = _image_source_from_part(content)
+        return text if isinstance(text, str) else "", [image_source] if image_source else []
+    return "", []
+
+
+def _content_text(content: Any) -> str:
+    return _content_text_and_images(content)[0]
 
 
 def _web_search_requested(payload: dict[str, Any]) -> bool:
@@ -83,24 +126,39 @@ Do not use shell commands, local files, MCP tools, or arbitrary network access.
 When returning JSON, include a top-level web_search_sources array when the requested format permits it. Each source must contain url, title, and snippet; snippet must be a verbatim excerpt from the search result that supports the answer. Do not invent source URLs or excerpts."""
 
 
-def _prompt_from_messages(messages: Any, *, web_search: bool = False) -> str:
+def _prompt_and_images_from_messages(messages: Any, *, web_search: bool = False) -> tuple[str, list[str]]:
     if not isinstance(messages, list):
-        return ""
+        return "", []
     sections: list[str] = [WEB_SEARCH_INSTRUCTION if web_search else "Use only the supplied messages. Do not use tools."]
+    image_inputs: list[str] = []
     for message in messages:
         if not isinstance(message, dict):
             continue
         role = str(message.get("role") or "user").upper()
-        text = _content_text(message.get("content"))
+        text, message_images = _content_text_and_images(message.get("content"))
+        if message_images:
+            image_inputs.extend(message_images)
+            image_note = "\n".join(
+                f"[Image attachment {len(image_inputs) - len(message_images) + index + 1} is supplied to the vision model.]"
+                for index in range(len(message_images))
+            )
+            text = f"{text}\n{image_note}" if text else image_note
         if text:
             sections.append(f"<{role}>\n{text}\n</{role}>")
-    return "\n\n".join(sections)
+    if len(image_inputs) > MAX_IMAGE_INPUTS:
+        raise HTTPException(status_code=400, detail="too_many_image_inputs")
+    return "\n\n".join(sections), image_inputs
 
 
-def _prompt_from_responses_input(
+def _prompt_from_messages(messages: Any, *, web_search: bool = False) -> str:
+    return _prompt_and_images_from_messages(messages, web_search=web_search)[0]
+
+
+def _prompt_and_images_from_responses_input(
     value: Any, *, instructions: Any = None, web_search: bool = False
-) -> str:
+) -> tuple[str, list[str]]:
     sections: list[str] = [WEB_SEARCH_INSTRUCTION if web_search else "Use only the supplied messages. Do not use tools."]
+    image_inputs: list[str] = []
     instruction_text = _content_text(instructions)
     if instruction_text:
         sections.append(f"<INSTRUCTIONS>\n{instruction_text}\n</INSTRUCTIONS>")
@@ -109,10 +167,27 @@ def _prompt_from_responses_input(
         if not isinstance(message, dict):
             continue
         role = str(message.get("role") or "user").upper()
-        text = _content_text(message.get("content"))
+        text, message_images = _content_text_and_images(message.get("content"))
+        if message_images:
+            image_inputs.extend(message_images)
+            image_note = "\n".join(
+                f"[Image attachment {len(image_inputs) - len(message_images) + index + 1} is supplied to the vision model.]"
+                for index in range(len(message_images))
+            )
+            text = f"{text}\n{image_note}" if text else image_note
         if text:
             sections.append(f"<{role}>\n{text}\n</{role}>")
-    return "\n\n".join(sections)
+    if len(image_inputs) > MAX_IMAGE_INPUTS:
+        raise HTTPException(status_code=400, detail="too_many_image_inputs")
+    return "\n\n".join(sections), image_inputs
+
+
+def _prompt_from_responses_input(
+    value: Any, *, instructions: Any = None, web_search: bool = False
+) -> str:
+    return _prompt_and_images_from_responses_input(
+        value, instructions=instructions, web_search=web_search
+    )[0]
 
 
 def _chat_requires_json(payload: dict[str, Any]) -> bool:
@@ -185,6 +260,7 @@ def _build_codex_command(
     reasoning_effort: str | None = None,
     schema_path: Path | None = None,
     json_events: bool = False,
+    image_paths: list[Path] | None = None,
 ) -> list[str]:
     command = [
         CODEX_BINARY,
@@ -211,7 +287,80 @@ def _build_codex_command(
         command.extend(["-c", f'model_reasoning_effort="{selected_effort}"'])
     if schema_path is not None:
         command.extend(["--output-schema", str(schema_path)])
+    for image_path in image_paths or []:
+        command.extend(["--image", str(image_path)])
     return command
+
+
+def _decode_data_image(source: str) -> tuple[bytes, str, str]:
+    header, separator, encoded = source.partition(",")
+    if not separator or not header.startswith("data:") or ";base64" not in header.lower():
+        raise HTTPException(status_code=400, detail="invalid_data_image_input")
+    mime = header[5:].split(";", 1)[0].strip().lower()
+    if mime not in IMAGE_MIME_SUFFIXES:
+        raise HTTPException(status_code=400, detail="unsupported_image_type")
+    try:
+        content = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise HTTPException(status_code=400, detail="invalid_data_image_input") from exc
+    return content, mime, IMAGE_MIME_SUFFIXES[mime]
+
+
+def _image_type_from_bytes(content: bytes, content_type: str = "") -> tuple[str, str] | None:
+    normalized_type = content_type.split(";", 1)[0].strip().lower()
+    if normalized_type in IMAGE_MIME_SUFFIXES:
+        return normalized_type, IMAGE_MIME_SUFFIXES[normalized_type]
+    for magic, mime, suffix in IMAGE_MAGIC_TYPES:
+        if content.startswith(magic) or (mime == "image/webp" and content.startswith(b"RIFF") and b"WEBP" in content[:16]):
+            return mime, suffix
+    return None
+
+
+async def _fetch_image_url(source: str) -> tuple[bytes, str, str]:
+    parsed = urlparse(source)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="unsupported_image_url")
+    try:
+        async with httpx.AsyncClient(
+            timeout=IMAGE_FETCH_TIMEOUT_SECONDS,
+            follow_redirects=True,
+        ) as client:
+            async with client.stream("GET", source) as response:
+                if response.status_code < 200 or response.status_code >= 300:
+                    raise HTTPException(status_code=400, detail="image_url_fetch_failed")
+                chunks: list[bytes] = []
+                total = 0
+                async for chunk in response.aiter_bytes():
+                    total += len(chunk)
+                    if total > MAX_IMAGE_BYTES:
+                        raise HTTPException(status_code=413, detail="image_input_too_large")
+                    chunks.append(chunk)
+                content = b"".join(chunks)
+                image_type = _image_type_from_bytes(content, response.headers.get("content-type", ""))
+    except HTTPException:
+        raise
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=400, detail="image_url_fetch_failed") from exc
+    if image_type is None:
+        raise HTTPException(status_code=400, detail="unsupported_image_type")
+    return content, image_type[0], image_type[1]
+
+
+async def _materialize_image_inputs(sources: list[str], tmp_path: Path) -> list[Path]:
+    if len(sources) > MAX_IMAGE_INPUTS:
+        raise HTTPException(status_code=400, detail="too_many_image_inputs")
+    paths: list[Path] = []
+    for index, source in enumerate(sources, start=1):
+        if source.startswith("data:"):
+            content, _mime, suffix = _decode_data_image(source)
+        else:
+            content, _mime, suffix = await _fetch_image_url(source)
+        if not content or len(content) > MAX_IMAGE_BYTES:
+            raise HTTPException(status_code=413, detail="image_input_too_large")
+        image_path = tmp_path / f"input-image-{index}{suffix}"
+        image_path.write_bytes(content)
+        paths.append(image_path)
+    return paths
 
 
 def _parse_codex_events(stdout_text: str) -> tuple[list[dict[str, Any]], dict[str, int], str]:
@@ -293,6 +442,7 @@ async def _run_codex_once(
     model: str | None = None,
     reasoning_effort: str | None = None,
     web_search: bool = False,
+    image_inputs: list[str] | None = None,
 ) -> CodexRun:
     _prepare_runtime_home()
     with tempfile.TemporaryDirectory(prefix="luna-codex-") as tmp_dir:
@@ -309,12 +459,14 @@ async def _run_codex_once(
             prompt = (
                 "Return one valid JSON object only.\n\n" + prompt
             )
+        image_paths = await _materialize_image_inputs(image_inputs or [], tmp_path)
         command = _build_codex_command(
             str(output_path),
             model=model,
             reasoning_effort=reasoning_effort,
             schema_path=schema_path,
             json_events=web_search,
+            image_paths=image_paths,
         )
         print(json.dumps({
             "event": "codex_invocation",
@@ -322,6 +474,7 @@ async def _run_codex_once(
             "reasoning_effort": _codex_reasoning_effort(reasoning_effort),
             "sandbox": "read-only",
             "approval_policy": "never",
+            "image_count": len(image_paths),
         }, sort_keys=True))
 
         env = os.environ.copy()
@@ -375,6 +528,7 @@ async def _run_codex(
     model: str | None = None,
     reasoning_effort: str | None = None,
     web_search: bool = False,
+    image_inputs: list[str] | None = None,
 ) -> CodexRun:
     if not prompt.strip():
         raise HTTPException(status_code=400, detail="empty prompt")
@@ -389,6 +543,7 @@ async def _run_codex(
             model=model,
             reasoning_effort=reasoning_effort,
             web_search=web_search,
+            image_inputs=image_inputs,
         ))
         if not require_json:
             return output
@@ -408,6 +563,7 @@ async def _run_codex(
                 model=model,
                 reasoning_effort=reasoning_effort,
                 web_search=web_search,
+                image_inputs=image_inputs,
             ))
             try:
                 parsed = json.loads(output.text)
@@ -431,6 +587,10 @@ async def healthz() -> dict[str, Any]:
         "reasoning_forwarding": True,
         "model_forwarding": True,
         "web_search_forwarding": True,
+        "image_input_forwarding": True,
+        "image_transport": "codex_exec_image_flags",
+        "max_image_inputs": MAX_IMAGE_INPUTS,
+        "max_image_bytes": MAX_IMAGE_BYTES,
         "sandbox": "read-only",
     }
 
@@ -446,13 +606,17 @@ async def chat_completions(payload: dict[str, Any], authorization: str | None = 
     _authorize(authorization)
     requested_model = str(payload.get("model") or "gpt-5.6-luna")
     web_search = _web_search_requested(payload)
+    prompt, image_inputs = _prompt_and_images_from_messages(
+        payload.get("messages"), web_search=web_search
+    )
     run = await _run_codex(
-        _prompt_from_messages(payload.get("messages"), web_search=web_search),
+        prompt,
         _chat_schema(payload),
         _chat_requires_json(payload),
         model=requested_model,
         reasoning_effort=payload.get("reasoning_effort"),
         web_search=web_search,
+        image_inputs=image_inputs,
     )
     return {
         "id": f"chatcmpl_{uuid.uuid4().hex}",
@@ -474,12 +638,13 @@ async def responses(payload: dict[str, Any], authorization: str | None = Header(
     _authorize(authorization)
     requested_model = str(payload.get("model") or "gpt-5.6-luna")
     web_search = _web_search_requested(payload)
+    prompt, image_inputs = _prompt_and_images_from_responses_input(
+        payload.get("input"),
+        instructions=payload.get("instructions"),
+        web_search=web_search,
+    )
     run = await _run_codex(
-        _prompt_from_responses_input(
-            payload.get("input"),
-            instructions=payload.get("instructions"),
-            web_search=web_search,
-        ),
+        prompt,
         _responses_schema(payload),
         _responses_requires_json(payload),
         model=requested_model,
@@ -487,6 +652,7 @@ async def responses(payload: dict[str, Any], authorization: str | None = Header(
         if isinstance(payload.get("reasoning"), dict)
         else None,
         web_search=web_search,
+        image_inputs=image_inputs,
     )
     response_id = f"resp_{uuid.uuid4().hex}"
     return {
