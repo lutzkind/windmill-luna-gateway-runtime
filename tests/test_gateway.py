@@ -116,18 +116,20 @@ def test_non_retryable_400_does_not_fallback():
     assert calls == ["https://codex.test/v1/chat/completions"]
 
 
-def test_invalid_json_success_falls_back():
+def test_invalid_json_success_does_not_fallback():
+    calls = []
     def handler(request):
-        if request.url.host == "codex.test":
-            return httpx.Response(200, json=success("not json"))
-        return httpx.Response(200, json=success(json.dumps({"ok": True})))
+        calls.append(str(request.url))
+        return httpx.Response(200, json=success("not json"))
     request_payload = payload()
     request_payload["response_format"] = {"type": "json_object"}
     with client_for(handler) as client:
         response = client.post("/v1/chat/completions", headers=headers(), json=request_payload)
     assert response.status_code == 502
-    assert response.headers["x-luna-gateway-provider"] == "none"
-    assert response.headers["x-luna-gateway-fallback-reason"] == "invalid_success"
+    assert response.headers["x-luna-gateway-provider"] == "codex"
+    assert response.headers["x-luna-gateway-fallback"] == "false"
+    assert "x-luna-gateway-fallback-reason" not in response.headers
+    assert calls == ["https://codex.test/v1/chat/completions"]
 
 
 def test_responses_endpoint_preserves_web_search_tool():
