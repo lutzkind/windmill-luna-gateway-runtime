@@ -225,7 +225,7 @@ class CircuitBreaker:
                 self.transient_failures.clear()
 
 
-@dataclass(frozen=True)
+@dataclass
 class ProviderResult:
     response: httpx.Response | None
     error_reason: str | None = None
