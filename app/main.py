@@ -840,15 +840,7 @@ def forced_failure_reason(
         raise HTTPException(
             status_code=403, detail="test_controls_disabled"
         )
-    if requested not in {
-        "quota",
-        "auth",
-        "timeout",
-        "network",
-        "upstream_5xx",
-        "rate_limit",
-        "invalid_success",
-    }:
+    if requested != "quota":
         raise HTTPException(
             status_code=400, detail="invalid_forced_failure"
         )
