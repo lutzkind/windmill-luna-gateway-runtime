@@ -565,31 +565,31 @@ class Gateway:
 
 def classify_failure(result: ProviderResult) -> str | None:
     if result.error_reason:
-        return result.error_reason
+        reason = result.error_reason
+        status = 504 if reason == "timeout" else 503 if reason == "auth" else 502
+        detail = result.error_detail or f"Codex failed with {reason}"
+        result.response = httpx.Response(
+            status, json={"error": {"message": detail, "type": "codex_provider_error", "code": reason}}
+        )
+        return None
     if result.response is None:
-        return "network"
-
-    status = result.response.status_code
-    text = result.response.text[:4000].lower()
-    if status in {401, 403}:
-        return "auth"
-    if status == 429:
+        result.response = httpx.Response(
+            502, json={"error": {"message": "Codex provider returned no response", "type": "codex_provider_error", "code": "network"}}
+        )
+        return None
+    if result.response.status_code == 429:
+        text = result.response.text[:4000].lower()
         quota_terms = (
             "usage limit",
             "quota",
             "plan limit",
-            "limit reached",
             "insufficient_quota",
             "codex usage",
             "weekly limit",
+            "weighted tokens left",
         )
-        return (
-            "quota"
-            if any(term in text for term in quota_terms)
-            else "rate_limit"
-        )
-    if status in {408, 500, 502, 503, 504}:
-        return "timeout" if status == 408 else "upstream_5xx"
+        if any(term in text for term in quota_terms):
+            return "quota"
     return None
 
 
