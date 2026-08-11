@@ -903,7 +903,7 @@ def create_app(
             payload=payload,
             request_id=request_id,
             fallback_api_key="",
-            forced_failure=forced_failure_reason(request, selected),
+            fallback_api_key=selected.server_openai_api_key,
         )
 
     @app.post("/v1/chat/completions")
