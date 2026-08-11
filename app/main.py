@@ -902,10 +902,9 @@ def create_app(
             kind=kind,
             payload=payload,
             request_id=request_id,
-            fallback_api_key="",
             fallback_api_key=selected.server_openai_api_key,
             forced_failure=forced_failure_reason(request, selected),
-
+        )
     @app.post("/v1/chat/completions")
     @app.post("/chat/completions", include_in_schema=False)
     async def chat_completions(request: Request) -> Response:
