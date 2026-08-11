@@ -505,7 +505,8 @@ async def _run_codex_once(
         output = output_path.read_text(encoding="utf-8").strip() if output_path.is_file() else agent_message or stdout_text
         if process.returncode != 0:
             detail = error_text[-1200:] or stdout_text[-1200:] or f"codex exited {process.returncode}"
-            raise HTTPException(status_code=502, detail=detail)
+            status_code = 429 if any(term in detail.lower() for term in ("usage limit", "quota", "plan limit", "insufficient_quota", "codex usage", "weekly limit", "weighted tokens left")) else 502
+            raise HTTPException(status_code=status_code, detail=detail)
         if not output:
             raise HTTPException(status_code=502, detail="codex returned an empty response")
         if web_search and not web_search_calls:
