@@ -6,12 +6,12 @@ Standalone OpenAI-compatible gateway for Windmill. It is unrelated to and fully 
 
 - Primary: pinned `openai-api-server-via-codex` sidecar using the host's Codex authentication.
 - Multimodal Chat Completions `image_url` and Responses `input_image` inputs are materialized into bounded temporary files and forwarded to Codex CLI with repeated `--image` flags. Image inputs are never reduced to text-only placeholders.
-- Fallback: official OpenAI API on Codex quota, rate limit, authentication, network, timeout, upstream failure, or invalid structured output.
-- Circuit breaking prevents repeated Codex attempts while an outage or quota condition is active.
+- Fallback: official OpenAI API only when Codex explicitly reports quota or usage-limit exhaustion. Capacity, rate-limit, authentication, network, timeout, upstream, and invalid structured-output failures do not fall back.
+- The quota circuit prevents repeated Codex attempts during a confirmed quota-exhaustion window; subsequent Luna requests use the API fallback until that circuit expires.
 
 ## Authentication
 
-Windmill sends its existing OpenAI API key as `Authorization: Bearer ...`. The gateway authorizes callers using a SHA-256 fingerprint; the raw key is not stored in this repository. The bearer is forwarded only when official-API fallback is required.
+Windmill authenticates to the gateway with an internal bearer whose SHA-256 fingerprint is allowlisted. For Luna quota fallback, the gateway uses its server-side `OPENAI_API_KEY`; the internal Windmill bearer is never forwarded to OpenAI.
 
 ## Endpoints
 
