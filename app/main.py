@@ -15,6 +15,8 @@ from typing import Any, Literal
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
 from jsonschema import ValidationError, validate as validate_json_schema
+LOGGER = logging.getLogger(__name__)
+
 EndpointKind = Literal["chat", "responses"]
 ProviderName = Literal["codex", "openai"]
 API_PASSTHROUGH_METHODS: dict[str, frozenset[str]] = {
