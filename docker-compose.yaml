@@ -31,6 +31,18 @@ services:
       retries: 5
       start_period: 20s
 
+  kokoro-tts:
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:v0.8.0
+    restart: unless-stopped
+    expose: ["8880"]
+    networks: [windmill]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8880/health', timeout=5)"]
+      interval: 15s
+      timeout: 8s
+      retries: 10
+      start_period: 60s
+
   windmill-luna-gateway:
     build:
       context: .
