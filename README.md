@@ -11,7 +11,7 @@ Standalone OpenAI-compatible gateway for Windmill. It is unrelated to and fully 
 
 ## Authentication
 
-Windmill authenticates to the gateway with an internal bearer whose SHA-256 fingerprint is allowlisted. For Luna quota fallback, the gateway uses its server-side `OPENAI_API_KEY`; the internal Windmill bearer is never forwarded to OpenAI.
+Windmill authenticates to the gateway with an internal bearer [REDACTED] SHA-256 fingerprint is allowlisted. For Luna quota fallback, the gateway uses its server-side `OPENAI_API_KEY`; the internal Windmill bearer [REDACTED] never forwarded to OpenAI.
 
 ## Endpoints
 
