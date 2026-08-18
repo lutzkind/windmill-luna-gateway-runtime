@@ -15,7 +15,9 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Response
+
+from app.codex_image import generate_codex_image
 
 app = FastAPI(title="Codex CLI OpenAI-compatible upstream", version="1.3.0")
 
@@ -589,11 +591,34 @@ async def healthz() -> dict[str, Any]:
         "model_forwarding": True,
         "web_search_forwarding": True,
         "image_input_forwarding": True,
+        "image_generation": True,
+        "image_generation_provider": "chatgpt-codex-subscription",
         "image_transport": "codex_exec_image_flags",
         "max_image_inputs": MAX_IMAGE_INPUTS,
         "max_image_bytes": MAX_IMAGE_BYTES,
         "sandbox": "read-only",
     }
+
+
+@app.post("/v1/images/generations")
+async def image_generations(payload: dict[str, Any], authorization: str | None = Header(default=None)) -> Response:
+    _authorize(authorization)
+    _prepare_runtime_home()
+    try:
+        upstream = await generate_codex_image(
+            payload,
+            RUNTIME_CODEX_HOME / "auth.json",
+            timeout_seconds=TIMEOUT_SECONDS,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        media_type=upstream.headers.get("content-type", "application/json").split(";", 1)[0],
+    )
 
 
 @app.get("/v1/models")

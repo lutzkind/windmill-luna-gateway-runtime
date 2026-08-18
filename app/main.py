@@ -24,7 +24,6 @@ API_PASSTHROUGH_METHODS: dict[str, frozenset[str]] = {
     "audio/translations": frozenset({"POST"}),
     "audio/speech": frozenset({"POST"}),
     "embeddings": frozenset({"POST"}),
-    "images/generations": frozenset({"POST"}),
     "images/edits": frozenset({"POST"}),
     "models": frozenset({"GET"}),
 }
@@ -330,6 +329,7 @@ class Gateway:
     ):
         self.settings = settings
         self.circuit = CircuitBreaker(settings)
+        self.image_circuit = CircuitBreaker(settings)
         self.semaphore = asyncio.Semaphore(settings.max_concurrency)
         self.client = httpx.AsyncClient(
             timeout=httpx.Timeout(settings.timeout_seconds),
@@ -487,6 +487,107 @@ class Gateway:
             return json_error(status_code=502, message="The OpenAI API provider was unavailable.", code="api_provider_unavailable", request_id=request_id, fallback_reason=result.error_reason or "api_only_model")
         return relay_response(result.response, provider="openai-api", fallback_used=False, fallback_reason=None, request_id=request_id)
 
+    async def generate_image(
+        self,
+        *,
+        payload: dict[str, Any],
+        request_id: str,
+        api_key: str,
+    ) -> Response:
+        skip, skip_reason = await self.image_circuit.should_skip()
+        fallback_reason: str | None = None
+        async with self.semaphore:
+            if not skip:
+                codex_response: httpx.Response | None = None
+                reason: str | None = None
+                try:
+                    codex_response = await self.client.post(
+                        f"{self.settings.codex_url}/images/generations",
+                        headers={
+                            "Authorization": f"Bearer {self.settings.codex_api_key}",
+                            "Content-Type": "application/json",
+                            "Accept": "application/json",
+                            "X-Request-ID": request_id,
+                        },
+                        json=payload,
+                    )
+                except httpx.TimeoutException:
+                    reason = "timeout"
+                except httpx.HTTPError:
+                    reason = "network"
+
+                if codex_response is not None:
+                    if 200 <= codex_response.status_code < 300:
+                        if validate_image_success(codex_response):
+                            await self.image_circuit.success()
+                            return relay_response(
+                                codex_response,
+                                provider="codex-image",
+                                fallback_used=False,
+                                fallback_reason=None,
+                                request_id=request_id,
+                            )
+                        reason = "invalid_success"
+                    else:
+                        reason = classify_image_failure_response(codex_response)
+                        if reason is None:
+                            return relay_response(
+                                codex_response,
+                                provider="codex-image",
+                                fallback_used=False,
+                                fallback_reason=None,
+                                request_id=request_id,
+                            )
+
+                reason = reason or "network"
+                await self.image_circuit.failure(reason)
+                fallback_reason = f"image_{reason}"
+            else:
+                fallback_reason = f"image_circuit_open:{skip_reason or 'unknown'}"
+
+            if not api_key:
+                return json_error(
+                    status_code=502,
+                    message="Codex image generation was unavailable and no OpenAI API fallback credential was supplied.",
+                    code="image_fallback_key_missing",
+                    request_id=request_id,
+                    fallback_reason=fallback_reason,
+                )
+            try:
+                api_response = await self.client.post(
+                    f"{self.settings.openai_url}/images/generations",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                        "Accept": "application/json",
+                        "X-Request-ID": request_id,
+                    },
+                    json=payload,
+                )
+            except httpx.TimeoutException:
+                return json_error(
+                    status_code=504,
+                    message="The OpenAI Images API fallback timed out.",
+                    code="image_api_timeout",
+                    request_id=request_id,
+                    fallback_reason=fallback_reason,
+                )
+            except httpx.HTTPError:
+                return json_error(
+                    status_code=502,
+                    message="The OpenAI Images API fallback request failed.",
+                    code="image_api_network",
+                    request_id=request_id,
+                    fallback_reason=fallback_reason,
+                )
+            return relay_response(
+                api_response,
+                provider="openai-api",
+                fallback_used=True,
+                fallback_reason=fallback_reason,
+                request_id=request_id,
+            )
+
     async def proxy_openai_api(
         self,
         *,
@@ -563,6 +664,32 @@ class Gateway:
             return ProviderResult(
                 None, "network", exc.__class__.__name__
             )
+
+
+def validate_image_success(response: httpx.Response) -> bool:
+    try:
+        data = response.json()
+    except ValueError:
+        return False
+    if not isinstance(data, dict):
+        return False
+    rows = data.get("data")
+    return isinstance(rows, list) and bool(rows) and isinstance(rows[0], dict) and bool(rows[0].get("b64_json"))
+
+
+def classify_image_failure_response(response: httpx.Response) -> str | None:
+    status = response.status_code
+    text = response.text[:8000].lower()
+    if status == 429:
+        quota_terms = ("image_gen", "usage limit", "quota", "plan limit", "insufficient_quota")
+        return "quota" if any(term in text for term in quota_terms) else "rate_limit"
+    if status in {401, 403}:
+        return "auth"
+    if status == 404:
+        return "capability"
+    if status >= 500:
+        return "upstream_5xx"
+    return None
 
 
 def classify_failure(result: ProviderResult) -> str | None:
@@ -866,6 +993,7 @@ def create_app(
     @app.get("/health")
     async def health() -> dict[str, Any]:
         circuit = await gateway.circuit.snapshot()
+        image_circuit = await gateway.image_circuit.snapshot()
         return {
             "status": "ok",
             "gateway_configured": bool(selected.allowed_api_key_sha256s),
@@ -880,6 +1008,8 @@ def create_app(
             ),
             "test_controls": selected.enable_test_controls,
             "circuit": circuit,
+            "image_circuit": image_circuit,
+            "image_generation": "codex-primary-api-fallback",
         }
 
     async def handle(
@@ -908,6 +1038,18 @@ def create_app(
     @app.post("/responses", include_in_schema=False)
     async def responses(request: Request) -> Response:
         return await handle(request, "responses")
+
+    @app.post("/v1/images/generations")
+    @app.post("/images/generations", include_in_schema=False)
+    async def image_generations(request: Request) -> Response:
+        require_gateway_auth(request, selected)
+        payload = await read_json_body(request, selected.max_body_bytes)
+        request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+        return await gateway.generate_image(
+            payload=payload,
+            request_id=request_id,
+            api_key=selected.server_openai_api_key,
+        )
 
     @app.api_route("/v1/{path:path}", methods=["GET", "POST"])
     @app.api_route("/{path:path}", methods=["GET", "POST"], include_in_schema=False)

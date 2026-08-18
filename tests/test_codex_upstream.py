@@ -200,3 +200,18 @@ def test_json_object_parser_rejects_non_object():
             asyncio.run(codex_upstream._run_codex("return an object", require_json=True))
     finally:
         codex_upstream._run_codex_once = original
+
+
+def test_codex_image_payload_normalizes_social_portrait_size():
+    from app.codex_image import normalize_generation_payload
+    normalized = normalize_generation_payload({"model": "gpt-image-2", "prompt": "premium restaurant table lighting", "size": "1200x1500", "quality": "medium", "output_format": "jpeg"})
+    assert normalized == {"model": "gpt-image-2", "prompt": "premium restaurant table lighting", "size": "1024x1536", "quality": "medium", "background": "auto"}
+    assert "output_format" not in normalized
+
+
+def test_codex_image_auth_uses_chatgpt_account_header():
+    from app.codex_image import authorization_headers
+    headers = authorization_headers({"tokens": {"access_token": "access-token", "refresh_token": "refresh-token", "account_id": "account-123"}})
+    assert headers["Authorization"] == "Bearer access-token"
+    assert headers["ChatGPT-Account-ID"] == "account-123"
+    assert headers["X-Codex-Image-Turn-Id"]

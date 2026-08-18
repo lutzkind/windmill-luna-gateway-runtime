@@ -364,3 +364,56 @@ def test_payload_only_context_guards_and_no_implicit_tools():
     assert stored.json()["detail"] == "persistent_storage_not_supported"
     assert chained.status_code == 400
     assert chained.json()["detail"] == "previous_response_id_not_supported"
+
+
+def test_codex_image_primary_is_not_api_passthrough():
+    seen = []
+    def handler(request):
+        seen.append(str(request.url))
+        if request.url.host == "codex.test" and request.url.path.endswith("/images/generations"):
+            return httpx.Response(200, json={"data": [{"b64_json": "aW1hZ2U="}], "size": "1024x1536"})
+        raise AssertionError(f"unexpected provider call: {request.url}")
+    with client_for(handler, server_openai_api_key="server-api-secret") as client:
+        response = client.post("/v1/images/generations", headers=headers(), json={"model": "gpt-image-2", "prompt": "restaurant lighting", "size": "1024x1536"})
+    assert response.status_code == 200
+    assert response.headers["x-luna-gateway-provider"] == "codex-image"
+    assert response.headers["x-luna-gateway-fallback"] == "false"
+    assert seen == ["https://codex.test/v1/images/generations"]
+
+
+def test_image_quota_falls_back_without_opening_text_circuit():
+    seen = []
+    def handler(request):
+        seen.append(str(request.url))
+        if request.url.host == "codex.test" and request.url.path.endswith("/images/generations"):
+            return httpx.Response(429, json={"error": {"message": "image_gen usage limit reached", "limit_id": "image_gen"}})
+        if request.url.host == "api.test" and request.url.path.endswith("/images/generations"):
+            return httpx.Response(200, json={"data": [{"b64_json": "ZmFsbGJhY2s="}], "size": "1024x1536"})
+        if request.url.host == "codex.test" and request.url.path.endswith("/chat/completions"):
+            return httpx.Response(200, json=success("text-still-codex"))
+        raise AssertionError(f"unexpected provider call: {request.url}")
+    with client_for(handler, server_openai_api_key="server-api-secret") as client:
+        image = client.post("/v1/images/generations", headers=headers(), json={"model": "gpt-image-2", "prompt": "restaurant lighting", "size": "1024x1536"})
+        text = client.post("/v1/chat/completions", headers=headers(), json=payload())
+        health = client.get("/health").json()
+    assert image.status_code == 200
+    assert image.headers["x-luna-gateway-provider"] == "openai-api"
+    assert image.headers["x-luna-gateway-fallback"] == "true"
+    assert image.headers["x-luna-gateway-fallback-reason"] == "image_quota"
+    assert text.status_code == 200
+    assert text.headers["x-luna-gateway-provider"] == "codex"
+    assert health["image_circuit"]["open"] is True
+    assert health["circuit"]["open"] is False
+
+
+def test_codex_image_client_error_does_not_use_paid_fallback():
+    seen = []
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(400, json={"error": {"message": "bad image request"}})
+    with client_for(handler, server_openai_api_key="server-api-secret") as client:
+        response = client.post("/v1/images/generations", headers=headers(), json={"model": "gpt-image-2", "prompt": "restaurant lighting"})
+    assert response.status_code == 400
+    assert response.headers["x-luna-gateway-provider"] == "codex-image"
+    assert response.headers["x-luna-gateway-fallback"] == "false"
+    assert seen == ["https://codex.test/v1/images/generations"]
