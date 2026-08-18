@@ -34,4 +34,4 @@ custom_commands:
 exceptions:
   - 'Docker, Compose, service-container, database and image parity is scheduled/manual and non-blocking'
   - 'application checks delegated to existing PR CI: .github/workflows/ci.yml'
-  - 'heavy checks delegated to existing custom heavy CI: .github/workflows/apply-codex-image-fallback-once.yml, .github/workflows/apply-codex-image-fallback-v2.yml'
+  - 'heavy checks delegated to existing custom heavy CI: .github/workflows/align-codex-image-client-once.yml, .github/workflows/apply-codex-image-fallback-once.yml, .github/workflows/apply-codex-image-fallback-v2.yml'

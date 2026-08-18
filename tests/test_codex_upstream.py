@@ -214,4 +214,6 @@ def test_codex_image_auth_uses_chatgpt_account_header():
     headers = authorization_headers({"tokens": {"access_token": "access-token", "refresh_token": "refresh-token", "account_id": "account-123"}})
     assert headers["Authorization"] == "Bearer access-token"
     assert headers["ChatGPT-Account-ID"] == "account-123"
+    assert headers["originator"] == "codex_cli_rs"
+    assert headers["User-Agent"].startswith("codex_cli_rs/")
     assert headers["X-Codex-Image-Turn-Id"]
