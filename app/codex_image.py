@@ -17,6 +17,8 @@ IMAGE_MODEL = "gpt-image-2"
 IMAGE_SIZES = frozenset({"auto", "1024x1024", "1024x1536", "1536x1024"})
 IMAGE_QUALITIES = frozenset({"auto", "low", "medium", "high"})
 IMAGE_BACKGROUNDS = frozenset({"auto", "opaque", "transparent"})
+CODEX_ORIGINATOR = "codex_cli_rs"
+CODEX_USER_AGENT = os.environ.get("CODEX_IMAGE_USER_AGENT", "codex_cli_rs/0.0.0 (Linux x86_64; server) windmill-luna-gateway").strip()
 
 
 def _jwt_payload(token: str) -> dict[str, Any]:
@@ -91,12 +93,28 @@ def authorization_headers(auth: dict[str, Any]) -> dict[str, str]:
         "Authorization": f"Bearer {str(tokens['access_token']).strip()}",
         "Content-Type": "application/json",
         "Accept": "application/json",
+        "originator": CODEX_ORIGINATOR,
+        "User-Agent": CODEX_USER_AGENT,
         "X-Codex-Image-Turn-Id": str(uuid.uuid4()),
     }
     account_id = str(tokens.get("account_id") or "").strip()
     if account_id:
         headers["ChatGPT-Account-ID"] = account_id
     return headers
+
+
+def auth_diagnostics(auth: dict[str, Any]) -> dict[str, Any]:
+    tokens = auth.get("tokens") if isinstance(auth.get("tokens"), dict) else {}
+    access_token = str(tokens.get("access_token") or "")
+    payload = _jwt_payload(access_token)
+    exp = payload.get("exp")
+    return {
+        "access_token_is_jwt": bool(payload),
+        "access_token_exp": int(exp) if isinstance(exp, (int, float)) else None,
+        "access_token_expiring": _access_token_expiring(access_token),
+        "account_id_present": bool(str(tokens.get("account_id") or "").strip()),
+        "refresh_token_present": bool(str(tokens.get("refresh_token") or "").strip()),
+    }
 
 
 def _persist_auth(auth_path: Path, auth: dict[str, Any]) -> None:
@@ -120,6 +138,7 @@ async def _refresh_auth(client: httpx.AsyncClient, auth_path: Path, auth: dict[s
             "refresh_token": refresh_token,
         },
     )
+    print(json.dumps({"event": "codex_image_token_refresh", "status": response.status_code}, sort_keys=True))
     if response.status_code < 200 or response.status_code >= 300:
         raise RuntimeError(f"codex image token refresh failed with HTTP {response.status_code}")
     data = response.json()
@@ -159,6 +178,7 @@ async def generate_codex_image(
                 headers=authorization_headers(auth),
                 json=normalized,
             )
+            print(json.dumps({"event": "codex_image_request", "attempt": attempt + 1, "status": response.status_code, **auth_diagnostics(auth)}, sort_keys=True))
             if response.status_code != 401 or attempt:
                 return response
             try:
