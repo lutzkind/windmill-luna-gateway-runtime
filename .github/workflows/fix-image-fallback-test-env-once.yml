@@ -1,0 +1,34 @@
+name: Fix image fallback test env once
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: [self-hosted, Linux, X64, ci, isolated]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Patch test environment and self-delete
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/apply-codex-image-fallback-once.yml')
+          text = path.read_text(encoding='utf-8')
+          old = '      - name: Run gateway tests\n        run: PYTHONPATH=. pytest -q\n'
+          new = '      - name: Run gateway tests\n        run: CODEX_BINARY=true PYTHONPATH=. pytest -q\n'
+          if text.count(old) != 1:
+              raise SystemExit('expected exactly one gateway test command anchor')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          rm .github/workflows/fix-image-fallback-test-env-once.yml
+          git config user.name "lutzkind"
+          git config user.email "132444134+lutzkind@users.noreply.github.com"
+          git add .github/workflows/apply-codex-image-fallback-once.yml .github/workflows/fix-image-fallback-test-env-once.yml
+          git diff --cached --check
+          git commit -m "Fix image fallback workflow test environment"
+          git push origin HEAD:main
