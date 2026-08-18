@@ -33,5 +33,5 @@ custom_commands:
   checks: 'git diff --check'
 exceptions:
   - 'Docker, Compose, service-container, database and image parity is scheduled/manual and non-blocking'
-  - 'fast-ci-review-required: .github/workflows/ci.yml: heavy-check-path-split-recommended'
   - 'application checks delegated to existing PR CI: .github/workflows/ci.yml'
+  - 'heavy checks delegated to existing custom heavy CI: .github/workflows/apply-codex-image-fallback-once.yml, .github/workflows/apply-codex-image-fallback-v2.yml'
