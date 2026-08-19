@@ -13,15 +13,16 @@ services:
       - /run:rw,nosuid,nodev,size=32m
       - /tmp:rw,nosuid,nodev,size=512m
     environment:
-      CODEX_HOME: /tmp/luna-codex-home
-      CODEX_AUTH_SOURCE: /run/secrets/codex-auth.json
+      CODEX_HOME: /run/secrets
+      LUNA_CODEX_HOME: /run/secrets
+      CODEX_AUTH_SOURCE: /run/secrets/auth.json
       CODEX_BINARY: codex
       CODEX_MAX_CONCURRENCY: "4"
       CODEX_TIMEOUT_SECONDS: "180"
       OPENAI_VIA_CODEX_API_KEY: internal-codex-sidecar-v1
     volumes:
-      # Keep the gateway's ChatGPT/Codex account separate from the host Codex session.
-      - /root/.codex-gateway/auth.json:/run/secrets/codex-auth.json:ro
+      # Use the live server Codex session so token refresh rotation persists across restarts.
+      - /root/.codex/auth.json:/run/secrets/auth.json:rw
     expose: ["18080"]
     networks: [gateway-private]
     healthcheck:
