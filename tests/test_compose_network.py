@@ -23,12 +23,13 @@ def test_gateway_containers_are_least_privilege():
     assert "cap_drop: [ALL]" in text
 
 
-def test_codex_auth_refreshes_persist_across_restarts():
+def test_codex_auth_refreshes_persist_across_restarts_without_file_snapshots():
     text = COMPOSE.read_text(encoding="utf-8")
 
-    assert "CODEX_HOME: /run/secrets" in text
-    assert "LUNA_CODEX_HOME: /run/secrets" in text
-    assert "CODEX_AUTH_SOURCE: /run/secrets/auth.json" in text
-    assert "/root/.codex/auth.json:/run/secrets/auth.json:rw" in text
+    assert "CODEX_HOME: /run/codex-home" in text
+    assert "LUNA_CODEX_HOME: /run/codex-home" in text
+    assert "CODEX_AUTH_SOURCE: /run/codex-home/auth.json" in text
+    assert "/root/.codex:/run/codex-home:rw" in text
+    assert "/root/.codex/auth.json:/" not in text
     assert "/root/.codex-gateway/auth.json" not in text
-    assert "/run/secrets/auth.json:ro" not in text
+    assert "/run/codex-home:ro" not in text
