@@ -33,6 +33,7 @@ RUNTIME_CODEX_HOME = Path(os.environ.get("LUNA_CODEX_HOME", "/tmp/luna-codex-hom
 TIMEOUT_SECONDS = max(30, int(os.environ.get("CODEX_TIMEOUT_SECONDS", "180")))
 MAX_CONCURRENCY = max(1, int(os.environ.get("CODEX_MAX_CONCURRENCY", "4")))
 SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENCY)
+AUTH_SYNC_LOCK = asyncio.Lock()
 CODEX_REASONING_EFFORTS = frozenset({"minimal", "low", "medium", "high", "xhigh"})
 WEB_SEARCH_TOOL_TYPES = frozenset({"web_search"})
 MAX_IMAGE_INPUTS = max(1, min(8, int(os.environ.get("CODEX_MAX_IMAGE_INPUTS", "8"))))
@@ -239,9 +240,43 @@ def _prepare_runtime_home() -> None:
         source_auth = CODEX_AUTH_SOURCE
         if not source_auth.is_file():
             raise HTTPException(status_code=503, detail="codex authentication is unavailable")
-        shutil.copy2(source_auth, target_auth)
+        if source_auth.resolve() != target_auth.resolve():
+            shutil.copy2(source_auth, target_auth)
     target_auth.chmod(0o600)
     # Intentionally do not copy config.toml. Completion jobs must never load MCP tools.
+
+
+def _sync_runtime_auth_to_source() -> None:
+    """Persist a Codex refresh-token rotation to the shared server session.
+
+    The source is deliberately an auth.json file bind, not the whole Codex
+    home. A direct write preserves the bind mount while allowing the runtime
+    copy to remain writable by the unprivileged process. A read-only source is
+    tolerated for backwards compatibility, but the live deployment is required
+    to use a read-write file bind so a restart cannot regress to an old token.
+    """
+    source_auth = CODEX_AUTH_SOURCE
+    target_auth = RUNTIME_CODEX_HOME / "auth.json"
+    if not source_auth.is_file() or not target_auth.is_file():
+        return
+    try:
+        updated = target_auth.read_bytes()
+        current = source_auth.read_bytes()
+        if updated == current:
+            return
+        with source_auth.open("r+b") as handle:
+            handle.seek(0)
+            handle.truncate(0)
+            handle.write(updated)
+            handle.flush()
+            os.fsync(handle.fileno())
+        source_auth.chmod(0o600)
+    except (OSError, PermissionError) as exc:
+        # Do not turn a successful model completion into a false provider
+        # failure. Health and deployment verification expose whether the live
+        # source file is writable; the next restart then fails closed if it is
+        # not aligned with this contract.
+        print(json.dumps({"event": "codex_auth_sync_failed", "error": type(exc).__name__}, sort_keys=True), flush=True)
 
 
 def _codex_reasoning_effort(value: Any) -> str | None:
@@ -446,6 +481,31 @@ async def _run_codex_once(
     web_search: bool = False,
     image_inputs: list[str] | None = None,
 ) -> CodexRun:
+    # Codex may rotate the refresh token while servicing a request. Serialize
+    # access to the shared runtime auth so concurrent Windmill QA calls cannot
+    # overwrite one another with stale token state.
+    async with AUTH_SYNC_LOCK:
+        return await _run_codex_once_impl(
+            prompt,
+            schema,
+            require_json,
+            model=model,
+            reasoning_effort=reasoning_effort,
+            web_search=web_search,
+            image_inputs=image_inputs,
+        )
+
+
+async def _run_codex_once_impl(
+    prompt: str,
+    schema: dict[str, Any] | None,
+    require_json: bool,
+    *,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+    web_search: bool = False,
+    image_inputs: list[str] | None = None,
+) -> CodexRun:
     _prepare_runtime_home()
     with tempfile.TemporaryDirectory(prefix="luna-codex-") as tmp_dir:
         tmp_path = Path(tmp_dir)
@@ -492,14 +552,17 @@ async def _run_codex_once(
             cwd=tmp_dir,
         )
         try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(prompt.encode("utf-8")),
-                timeout=TIMEOUT_SECONDS,
-            )
-        except TimeoutError:
-            process.kill()
-            await process.communicate()
-            raise HTTPException(status_code=504, detail="codex execution timed out")
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(prompt.encode("utf-8")),
+                    timeout=TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                process.kill()
+                await process.communicate()
+                raise HTTPException(status_code=504, detail="codex execution timed out")
+        finally:
+            _sync_runtime_auth_to_source()
 
         stdout_text = stdout.decode("utf-8", errors="replace").strip()
         error_text = stderr.decode("utf-8", errors="replace").strip()
@@ -597,6 +660,10 @@ async def healthz() -> dict[str, Any]:
         "max_image_inputs": MAX_IMAGE_INPUTS,
         "max_image_bytes": MAX_IMAGE_BYTES,
         "sandbox": "read-only",
+        "auth_source_file_present": CODEX_AUTH_SOURCE.is_file(),
+        "auth_source_writable": os.access(CODEX_AUTH_SOURCE, os.W_OK),
+        "runtime_home": str(RUNTIME_CODEX_HOME),
+        "auth_persistence": "shared_server_session_file_rw",
     }
 
 
