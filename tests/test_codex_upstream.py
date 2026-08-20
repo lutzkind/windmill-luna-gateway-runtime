@@ -166,6 +166,22 @@ def test_runtime_home_uses_bootstrapped_auth_without_reading_source_mount(monkey
     assert target_auth.read_text(encoding="utf-8") == '{"bootstrapped":true}'
 
 
+def test_rotated_runtime_auth_is_persisted_to_shared_server_session(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    source_auth = tmp_path / "shared" / "auth.json"
+    source_auth.parent.mkdir()
+    source_auth.write_text('{"token":"old"}', encoding="utf-8")
+    runtime_home = tmp_path / "runtime"
+    runtime_home.mkdir()
+    (runtime_home / "auth.json").write_text('{"token":"rotated"}', encoding="utf-8")
+
+    monkeypatch.setattr(codex_upstream, "CODEX_AUTH_SOURCE", source_auth)
+    monkeypatch.setattr(codex_upstream, "RUNTIME_CODEX_HOME", runtime_home)
+
+    codex_upstream._sync_runtime_auth_to_source()
+
+    assert source_auth.read_text(encoding="utf-8") == '{"token":"rotated"}'
+
+
 def test_open_json_object_contract_is_validated_without_cli_schema():
     assert codex_upstream._chat_schema({"response_format": {"type": "json_object"}}) is None
     assert codex_upstream._responses_schema({"text": {"format": {"type": "json"}}}) is None

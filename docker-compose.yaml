@@ -13,17 +13,20 @@ services:
       - /run:rw,nosuid,nodev,size=32m
       - /tmp:rw,nosuid,nodev,size=512m
     environment:
-      CODEX_HOME: /run/codex-home
-      LUNA_CODEX_HOME: /run/codex-home
-      CODEX_AUTH_SOURCE: /run/codex-home/auth.json
+      # Keep the current server ChatGPT/Codex session as the single auth
+      # source, while Codex itself uses a clean writable runtime home.
+      CODEX_HOME: /tmp/luna-codex-home
+      LUNA_CODEX_HOME: /tmp/luna-codex-home
+      CODEX_AUTH_SOURCE: /run/secrets/codex-auth.json
       CODEX_BINARY: codex
       CODEX_MAX_CONCURRENCY: "4"
       CODEX_TIMEOUT_SECONDS: "180"
       OPENAI_VIA_CODEX_API_KEY: internal-codex-sidecar-v1
     volumes:
-      # Bind the live Codex home as a directory so refresh-token rotation is
-      # persistent and Coolify never serializes auth.json into a stale snapshot.
-      - /root/.codex:/run/codex-home:rw
+      # Use the exact current server session. Mount only auth.json so the
+      # unprivileged proxy never inherits root-owned Codex config/cache files.
+      # RW is required so rotated refresh tokens survive a proxy restart.
+      - /root/.codex/auth.json:/run/secrets/codex-auth.json:rw
     expose: ["18080"]
     networks: [gateway-private]
     healthcheck:
