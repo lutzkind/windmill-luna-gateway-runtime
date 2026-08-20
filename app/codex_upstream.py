@@ -541,6 +541,11 @@ async def _run_codex_once_impl(
 
         env = os.environ.copy()
         env["CODEX_HOME"] = str(RUNTIME_CODEX_HOME)
+        # The Coolify entrypoint drops to UID 10001 but inherits the image's
+        # root HOME. Codex uses HOME for its app-server/path-alias bootstrap
+        # even with --ignore-user-config; point it at the same writable,
+        # session-scoped runtime home to avoid Permission denied startup.
+        env["HOME"] = str(RUNTIME_CODEX_HOME)
         env.pop("OPENAI_API_KEY", None)
 
         process = await asyncio.create_subprocess_exec(
