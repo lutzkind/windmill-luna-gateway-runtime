@@ -1,83 +1,14 @@
-name: Align Codex image client once
+name: Align Codex image client once (retired)
+
 on:
   workflow_dispatch:
+
 permissions:
-  contents: write
+  contents: read
+
 jobs:
-  align:
+  retired:
+    if: ${{ false }}
     runs-on: [self-hosted, Linux, X64, ci, isolated]
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 0
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Align first-party Codex HTTP headers and diagnostics
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-
-          def replace_once(path: str, old: str, new: str) -> None:
-              p = Path(path)
-              text = p.read_text(encoding='utf-8')
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'{path}: expected one anchor, found {count}: {old[:120]!r}')
-              p.write_text(text.replace(old, new, 1), encoding='utf-8')
-
-          replace_once(
-              'app/codex_image.py',
-              'IMAGE_BACKGROUNDS = frozenset({"auto", "opaque", "transparent"})\n',
-              'IMAGE_BACKGROUNDS = frozenset({"auto", "opaque", "transparent"})\nCODEX_ORIGINATOR = "codex_cli_rs"\nCODEX_USER_AGENT = os.environ.get("CODEX_IMAGE_USER_AGENT", "codex_cli_rs/0.0.0 (Linux x86_64; server) windmill-luna-gateway").strip()\n',
-          )
-          replace_once(
-              'app/codex_image.py',
-              '        "Accept": "application/json",\n        "X-Codex-Image-Turn-Id": str(uuid.uuid4()),\n',
-              '        "Accept": "application/json",\n        "originator": CODEX_ORIGINATOR,\n        "User-Agent": CODEX_USER_AGENT,\n        "X-Codex-Image-Turn-Id": str(uuid.uuid4()),\n',
-          )
-          replace_once(
-              'app/codex_image.py',
-              'def _persist_auth(auth_path: Path, auth: dict[str, Any]) -> None:\n',
-              '''def auth_diagnostics(auth: dict[str, Any]) -> dict[str, Any]:\n    tokens = auth.get("tokens") if isinstance(auth.get("tokens"), dict) else {}\n    access_token = str(tokens.get("access_token") or "")\n    payload = _jwt_payload(access_token)\n    exp = payload.get("exp")\n    return {\n        "access_token_is_jwt": bool(payload),\n        "access_token_exp": int(exp) if isinstance(exp, (int, float)) else None,\n        "access_token_expiring": _access_token_expiring(access_token),\n        "account_id_present": bool(str(tokens.get("account_id") or "").strip()),\n        "refresh_token_present": bool(str(tokens.get("refresh_token") or "").strip()),\n    }\n\n\ndef _persist_auth(auth_path: Path, auth: dict[str, Any]) -> None:\n''',
-          )
-          replace_once(
-              'app/codex_image.py',
-              '    if response.status_code < 200 or response.status_code >= 300:\n        raise RuntimeError(f"codex image token refresh failed with HTTP {response.status_code}")\n',
-              '    print(json.dumps({"event": "codex_image_token_refresh", "status": response.status_code}, sort_keys=True))\n    if response.status_code < 200 or response.status_code >= 300:\n        raise RuntimeError(f"codex image token refresh failed with HTTP {response.status_code}")\n',
-          )
-          replace_once(
-              'app/codex_image.py',
-              '            response = await client.post(\n                f"{CHATGPT_CODEX_BASE_URL}/images/generations",\n                headers=authorization_headers(auth),\n                json=normalized,\n            )\n            if response.status_code != 401 or attempt:\n',
-              '            response = await client.post(\n                f"{CHATGPT_CODEX_BASE_URL}/images/generations",\n                headers=authorization_headers(auth),\n                json=normalized,\n            )\n            print(json.dumps({"event": "codex_image_request", "attempt": attempt + 1, "status": response.status_code, **auth_diagnostics(auth)}, sort_keys=True))\n            if response.status_code != 401 or attempt:\n',
-          )
-
-          tests = Path('tests/test_codex_upstream.py')
-          text = tests.read_text(encoding='utf-8')
-          old = '    assert headers["ChatGPT-Account-ID"] == "account-123"\n    assert headers["X-Codex-Image-Turn-Id"]\n'
-          new = '    assert headers["ChatGPT-Account-ID"] == "account-123"\n    assert headers["originator"] == "codex_cli_rs"\n    assert headers["User-Agent"].startswith("codex_cli_rs/")\n    assert headers["X-Codex-Image-Turn-Id"]\n'
-          if text.count(old) != 1:
-              raise SystemExit('tests/test_codex_upstream.py: header assertion anchor mismatch')
-          tests.write_text(text.replace(old, new, 1), encoding='utf-8')
-          PY
-      - name: Install test dependencies
-        run: pip install -r requirements-dev.txt
-      - name: Run full gateway tests
-        run: CODEX_BINARY=true PYTHONPATH=. pytest -q
-      - name: Validate Compose
-        run: docker compose -f docker-compose.yaml config >/dev/null
-      - name: Build production image
-        run: docker build -t windmill-luna-gateway:codex-image-client-test .
-      - name: Commit application source
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "lutzkind"
-          git config user.email "132444134+lutzkind@users.noreply.github.com"
-          git add app/codex_image.py tests/test_codex_upstream.py
-          git diff --cached --check
-          git commit -m "Align Codex image client with first-party headers"
-          git push origin HEAD:main
+      - run: echo "Retired workflow; no action performed."
