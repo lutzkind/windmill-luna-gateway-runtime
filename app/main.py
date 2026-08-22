@@ -541,9 +541,34 @@ class Gateway:
 
                 reason = reason or "network"
                 await self.image_circuit.failure(reason)
-                fallback_reason = f"image_{reason}"
+                if reason != "quota":
+                    if codex_response is not None:
+                        return relay_response(
+                            codex_response,
+                            provider="codex-image",
+                            fallback_used=False,
+                            fallback_reason=None,
+                            request_id=request_id,
+                        )
+                    status_code = 504 if reason == "timeout" else 502
+                    return json_error(
+                        status_code=status_code,
+                        message=f"Codex image generation failed with {reason}; API fallback is quota-only.",
+                        code=f"image_codex_{reason}",
+                        request_id=request_id,
+                        fallback_reason=None,
+                    )
+                fallback_reason = "image_quota"
             else:
-                fallback_reason = f"image_circuit_open:{skip_reason or 'unknown'}"
+                if skip_reason != "quota":
+                    return json_error(
+                        status_code=502,
+                        message=f"Codex image circuit is open for {skip_reason or 'unknown'}; API fallback is quota-only.",
+                        code="image_codex_circuit_nonquota",
+                        request_id=request_id,
+                        fallback_reason=None,
+                    )
+                fallback_reason = "image_circuit_open:quota"
 
             if not api_key:
                 return json_error(
