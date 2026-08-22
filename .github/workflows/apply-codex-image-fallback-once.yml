@@ -1,7 +1,14 @@
-name: Apply Codex image fallback once (disabled)
+name: Apply Codex image fallback once (retired)
 
-on: []
+on:
+  workflow_dispatch:
 
-permissions: {}
+permissions:
+  contents: read
 
-jobs: {}
+jobs:
+  retired:
+    if: ${{ false }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Retired workflow; no action performed."

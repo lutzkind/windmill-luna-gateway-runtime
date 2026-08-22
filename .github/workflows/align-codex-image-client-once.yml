@@ -1,7 +1,14 @@
-name: Align Codex image client once (disabled)
+name: Align Codex image client once (retired)
 
-on: []
+on:
+  workflow_dispatch:
 
-permissions: {}
+permissions:
+  contents: read
 
-jobs: {}
+jobs:
+  retired:
+    if: ${{ false }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Retired workflow; no action performed."

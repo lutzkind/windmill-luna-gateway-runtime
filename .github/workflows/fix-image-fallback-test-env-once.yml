@@ -1,7 +1,14 @@
-name: Fix image fallback test env once (disabled)
+name: Fix image fallback test env once (retired)
 
-on: []
+on:
+  workflow_dispatch:
 
-permissions: {}
+permissions:
+  contents: read
 
-jobs: {}
+jobs:
+  retired:
+    if: ${{ false }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Retired workflow; no action performed."
