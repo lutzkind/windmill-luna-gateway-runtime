@@ -54,6 +54,9 @@ services:
         condition: service_healthy
     environment:
       ALLOWED_API_KEY_SHA256S: "f777774c7a4100fc25022f34d27483a9080679aed01a0fca54ced407ca09df9f,68471dcada6d4d3b0468b20ad6ea6fc2ea21451d4d7a28b7fdb63be763679817"
+      # Additional callers are injected through the existing Coolify runtime
+      # environment so application-specific credentials never enter Git.
+      ADDITIONAL_ALLOWED_API_KEY_SHA256S: "${ADDITIONAL_ALLOWED_API_KEY_SHA256S:-}"
       CODEX_UPSTREAM_API_KEY: internal-codex-sidecar-v1
       CODEX_UPSTREAM_URL: http://codex-upstream:18080/v1
       OPENAI_API_BASE_URL: https://api.openai.com/v1
