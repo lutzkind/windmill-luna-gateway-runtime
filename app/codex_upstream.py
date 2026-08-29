@@ -506,6 +506,8 @@ async def _run_codex_once_impl(
     web_search: bool = False,
     image_inputs: list[str] | None = None,
 ) -> CodexRun:
+    if shutil.which(CODEX_BINARY) is None:
+        raise HTTPException(status_code=503, detail="codex binary unavailable")
     _prepare_runtime_home()
     with tempfile.TemporaryDirectory(prefix="luna-codex-") as tmp_dir:
         tmp_path = Path(tmp_dir)
@@ -603,8 +605,6 @@ async def _run_codex(
 ) -> CodexRun:
     if not prompt.strip():
         raise HTTPException(status_code=400, detail="empty prompt")
-    if shutil.which(CODEX_BINARY) is None:
-        raise HTTPException(status_code=503, detail="codex binary unavailable")
 
     async with SEMAPHORE:
         output = _as_codex_run(await _run_codex_once(
