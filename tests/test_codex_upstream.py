@@ -189,6 +189,12 @@ def test_open_json_object_contract_is_validated_without_cli_schema():
     assert codex_upstream._responses_requires_json({"text": {"format": {"type": "json"}}})
 
 
+def test_codex_binary_is_checked_at_execution_boundary(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(codex_upstream.shutil, "which", lambda _: None)
+    with pytest.raises(HTTPException, match="codex binary unavailable"):
+        asyncio.run(codex_upstream._run_codex_once_impl("return an object", None, True))
+
+
 def test_json_object_output_is_repaired_without_passing_invalid_schema(monkeypatch: pytest.MonkeyPatch):
     calls: list[tuple[str, object]] = []
 
