@@ -14,10 +14,14 @@ if [ "$(id -u)" -eq 0 ]; then
     if [ -n "$auth_source" ]; then
         test -r "$auth_source"
         if [ "$auth_source" != "$auth_target" ]; then
-            cp "$auth_source" "$auth_target"
+            # The host auth file is the single credential source. Older
+            # runtimes copied it into tmpfs, so refresh-token rotation was
+            # lost on restart and sibling Codex consumers diverged.
+            chown "$runtime_uid:$runtime_gid" "$auth_source"
+            chmod 0600 "$auth_source"
+            rm -f "$auth_target"
+            ln -s "$auth_source" "$auth_target"
         fi
-        chown "$runtime_uid:$runtime_gid" "$auth_target"
-        chmod 0600 "$auth_target"
     fi
     exec setpriv \
         --reuid="$runtime_uid" \
