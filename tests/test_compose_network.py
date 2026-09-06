@@ -35,6 +35,7 @@ def test_gateway_containers_are_least_privilege():
 
 def test_codex_auth_refreshes_persist_across_restarts_without_file_snapshots():
     text = COMPOSE.read_text(encoding="utf-8")
+    entrypoint = (Path(__file__).parents[1] / "runtime-entrypoint.sh").read_text(encoding="utf-8")
 
     assert "CODEX_HOME: /tmp/luna-codex-home" in text
     assert "LUNA_CODEX_HOME: /tmp/luna-codex-home" in text
@@ -42,3 +43,6 @@ def test_codex_auth_refreshes_persist_across_restarts_without_file_snapshots():
     assert "/root/.codex/auth.json:/run/secrets/codex-auth.json:rw" in text
     assert "/root/.codex:/run/codex-home:rw" not in text
     assert "/root/.codex-gateway/auth.json" not in text
+    assert 'chown "$runtime_uid:$runtime_gid" "$auth_source"' in entrypoint
+    assert 'ln -s "$auth_source" "$auth_target"' in entrypoint
+    assert 'cp "$auth_source" "$auth_target"' not in entrypoint
