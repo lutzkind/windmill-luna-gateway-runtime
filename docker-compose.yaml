@@ -60,7 +60,7 @@ services:
       CODEX_UPSTREAM_API_KEY: internal-codex-sidecar-v1
       CODEX_UPSTREAM_URL: http://codex-upstream:18080/v1
       OPENAI_API_BASE_URL: https://api.openai.com/v1
-      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY}"
       ALLOWED_MODELS: gpt-5.6-luna,luna-auto
       MODEL_ALIASES_JSON: '{"luna-auto":"gpt-5.6-luna","gpt-5.6-luna":"gpt-5.6-luna"}'
       PROVIDER_TIMEOUT_SECONDS: "180"
