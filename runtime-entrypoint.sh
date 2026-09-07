@@ -14,13 +14,13 @@ if [ "$(id -u)" -eq 0 ]; then
         test -r "$auth_source"
         if [ "$auth_source" != "$auth_target" ]; then
             # Keep the host auth file as the single credential source. Host
-            # `codex login` replaces auth.json atomically as root:root 0600;
-            # an unprivileged long-running sidecar would then lose access to
-            # the new inode until restart. The Codex upstream therefore keeps
-            # uid/gid 0 but drops every Linux capability and sets
-            # no-new-privileges before starting. This survives both Codex
-            # token rotation and future interactive login replacement without
-            # copying or snapshotting credentials.
+            # `codex login` replaces auth.json atomically as root:root 0600.
+            # Normalize any legacy UID-10001 inode left by older runtimes back
+            # to that canonical ownership before dropping all capabilities.
+            # The Codex upstream then keeps uid/gid 0 with no Linux capabilities
+            # and no-new-privileges, so both token rotation and future login
+            # replacements remain readable without restart or credential copies.
+            chown 0:0 "$auth_source"
             chmod 0600 "$auth_source"
             rm -f "$auth_target"
             ln -s "$auth_source" "$auth_target"
