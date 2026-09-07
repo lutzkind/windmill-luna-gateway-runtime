@@ -23,8 +23,8 @@ def test_gateway_containers_are_least_privilege():
     assert "cap_drop: [ALL]" in text
     assert "CODEX_HOME: /tmp/luna-codex-home" in text
     assert "LUNA_CODEX_HOME: /tmp/luna-codex-home" in text
-    assert "CODEX_AUTH_SOURCE: /run/secrets/codex-auth.json" in text
-    assert "/root/.codex/auth.json:/run/secrets/codex-auth.json:rw" in text
+    assert "CODEX_AUTH_SOURCE: /run/codex-session/auth.json" in text
+    assert "/root/.codex:/run/codex-session:rw" in text
     dockerfile_text = (Path(__file__).parents[1] / "Dockerfile").read_text(encoding="utf-8")
     assert "chown 10001:0 /tmp/luna-codex-home" in dockerfile_text
     assert "chmod 0770 /tmp/luna-codex-home" in dockerfile_text
@@ -33,15 +33,15 @@ def test_gateway_containers_are_least_privilege():
     assert 'chmod 0770 "$codex_home"' in entrypoint_text
 
 
-def test_codex_auth_refreshes_persist_across_restarts_without_file_snapshots():
+def test_codex_auth_refreshes_persist_without_coolify_file_snapshots():
     text = COMPOSE.read_text(encoding="utf-8")
     entrypoint = (Path(__file__).parents[1] / "runtime-entrypoint.sh").read_text(encoding="utf-8")
 
     assert "CODEX_HOME: /tmp/luna-codex-home" in text
     assert "LUNA_CODEX_HOME: /tmp/luna-codex-home" in text
-    assert "CODEX_AUTH_SOURCE: /run/secrets/codex-auth.json" in text
-    assert "/root/.codex/auth.json:/run/secrets/codex-auth.json:rw" in text
-    assert "/root/.codex:/run/codex-home:rw" not in text
+    assert "CODEX_AUTH_SOURCE: /run/codex-session/auth.json" in text
+    assert "/root/.codex:/run/codex-session:rw" in text
+    assert "/root/.codex/auth.json:/run/secrets/codex-auth.json:rw" not in text
     assert "/root/.codex-gateway/auth.json" not in text
     assert 'chown "$runtime_uid:$runtime_gid" "$auth_source"' in entrypoint
     assert 'ln -s "$auth_source" "$auth_target"' in entrypoint
