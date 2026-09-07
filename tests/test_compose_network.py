@@ -48,6 +48,7 @@ def test_codex_auth_refreshes_persist_without_coolify_file_snapshots():
     assert "/root/.codex/auth.json:/run/secrets/codex-auth.json:rw" not in text
     assert "/root/.codex-gateway/auth.json" not in text
     assert 'chown "$runtime_uid:$runtime_gid" "$auth_source"' not in entrypoint
+    assert 'chown 0:0 "$auth_source"' in entrypoint
     assert 'ln -s "$auth_source" "$auth_target"' in entrypoint
     assert 'cp "$auth_source" "$auth_target"' not in entrypoint
 
@@ -57,7 +58,8 @@ def test_codex_auth_survives_future_host_login_atomic_replacement():
 
     # Interactive host Codex login atomically replaces auth.json as root-owned.
     # The long-running upstream must therefore retain uid 0 rather than depend
-    # on a one-time chown that becomes stale after the next replacement.
+    # on a one-time unprivileged chown that becomes stale after replacement.
+    assert 'chown 0:0 "$auth_source"' in entrypoint
     assert "--reuid=0" in entrypoint
     assert "--regid=0" in entrypoint
     assert 'chown "$runtime_uid:$runtime_gid" "$auth_source"' not in entrypoint
