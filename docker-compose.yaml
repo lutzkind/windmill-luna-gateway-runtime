@@ -17,16 +17,17 @@ services:
       # source, while Codex itself uses a clean writable runtime home.
       CODEX_HOME: /tmp/luna-codex-home
       LUNA_CODEX_HOME: /tmp/luna-codex-home
-      CODEX_AUTH_SOURCE: /run/secrets/codex-auth.json
+      CODEX_AUTH_SOURCE: /run/codex-session/auth.json
       CODEX_BINARY: codex
       CODEX_MAX_CONCURRENCY: "4"
       CODEX_TIMEOUT_SECONDS: "180"
       OPENAI_VIA_CODEX_API_KEY: internal-codex-sidecar-v1
     volumes:
-      # Use the exact current server session. Mount only auth.json so the
-      # unprivileged proxy never inherits root-owned Codex config/cache files.
-      # RW is required so rotated refresh tokens survive a proxy restart.
-      - /root/.codex/auth.json:/run/secrets/codex-auth.json:rw
+      # Bind the host Codex directory, not auth.json as a Coolify-managed file.
+      # Codex refreshes auth.json with atomic replacement, and the directory bind
+      # keeps every consumer on the same host-backed inode without a stale secret
+      # snapshot being persisted by Coolify.
+      - /root/.codex:/run/codex-session:rw
     expose: ["18080"]
     networks: [gateway-private]
     healthcheck:
