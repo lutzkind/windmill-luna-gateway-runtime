@@ -31,6 +31,10 @@ def test_gateway_containers_are_least_privilege():
     entrypoint_text = (Path(__file__).parents[1] / "runtime-entrypoint.sh").read_text(encoding="utf-8")
     assert 'chown "$runtime_uid:0" "$codex_home"' in entrypoint_text
     assert 'chmod 0770 "$codex_home"' in entrypoint_text
+    assert "--bounding-set=-all" in entrypoint_text
+    assert "--inh-caps=-all" in entrypoint_text
+    assert "--ambient-caps=-all" in entrypoint_text
+    assert "--nnp" in entrypoint_text
 
 
 def test_codex_auth_refreshes_persist_without_coolify_file_snapshots():
@@ -43,6 +47,23 @@ def test_codex_auth_refreshes_persist_without_coolify_file_snapshots():
     assert "/root/.codex:/run/codex-session:rw" in text
     assert "/root/.codex/auth.json:/run/secrets/codex-auth.json:rw" not in text
     assert "/root/.codex-gateway/auth.json" not in text
-    assert 'chown "$runtime_uid:$runtime_gid" "$auth_source"' in entrypoint
+    assert 'chown "$runtime_uid:$runtime_gid" "$auth_source"' not in entrypoint
     assert 'ln -s "$auth_source" "$auth_target"' in entrypoint
     assert 'cp "$auth_source" "$auth_target"' not in entrypoint
+
+
+def test_codex_auth_survives_future_host_login_atomic_replacement():
+    entrypoint = (Path(__file__).parents[1] / "runtime-entrypoint.sh").read_text(encoding="utf-8")
+
+    # Interactive host Codex login atomically replaces auth.json as root-owned.
+    # The long-running upstream must therefore retain uid 0 rather than depend
+    # on a one-time chown that becomes stale after the next replacement.
+    assert "--reuid=0" in entrypoint
+    assert "--regid=0" in entrypoint
+    assert 'chown "$runtime_uid:$runtime_gid" "$auth_source"' not in entrypoint
+    # Root identity is retained only after all capabilities are removed and
+    # no-new-privileges is enabled.
+    assert "--bounding-set=-all" in entrypoint
+    assert "--inh-caps=-all" in entrypoint
+    assert "--ambient-caps=-all" in entrypoint
+    assert "--nnp" in entrypoint
