@@ -6,6 +6,7 @@ import binascii
 import json
 import os
 import shutil
+import stat
 import tempfile
 import time
 from urllib.parse import urlparse
@@ -16,6 +17,7 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Response
+from fastapi.responses import JSONResponse
 
 from app.codex_image import generate_codex_image
 
@@ -233,50 +235,70 @@ def _responses_schema(payload: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def _prepare_runtime_home() -> None:
-    RUNTIME_CODEX_HOME.mkdir(parents=True, exist_ok=True)
-    target_auth = RUNTIME_CODEX_HOME / "auth.json"
-    if not target_auth.is_file():
-        source_auth = CODEX_AUTH_SOURCE
-        if not source_auth.is_file():
-            raise HTTPException(status_code=503, detail="codex authentication is unavailable")
-        if source_auth.resolve() != target_auth.resolve():
-            shutil.copy2(source_auth, target_auth)
-    target_auth.chmod(0o600)
-    # Intentionally do not copy config.toml. Completion jobs must never load MCP tools.
-
-
-def _sync_runtime_auth_to_source() -> None:
-    """Persist a Codex refresh-token rotation to the shared server session.
-
-    The source is deliberately an auth.json file bind, not the whole Codex
-    home. A direct write preserves the bind mount while allowing the runtime
-    copy to remain writable by the unprivileged process. A read-only source is
-    tolerated for backwards compatibility, but the live deployment is required
-    to use a read-write file bind so a restart cannot regress to an old token.
-    """
+def _shared_auth_status() -> dict[str, bool]:
+    """Return non-secret health facts for the canonical shared auth file."""
     source_auth = CODEX_AUTH_SOURCE
-    target_auth = RUNTIME_CODEX_HOME / "auth.json"
-    if not source_auth.is_file() or not target_auth.is_file():
-        return
+    status = {
+        "file_present": False,
+        "canonical_path": False,
+        "regular_file": False,
+        "owner": False,
+        "permissions": False,
+        "writable": False,
+        "json_valid": False,
+        "valid": False,
+    }
     try:
-        updated = target_auth.read_bytes()
-        current = source_auth.read_bytes()
-        if updated == current:
-            return
-        with source_auth.open("r+b") as handle:
-            handle.seek(0)
-            handle.truncate(0)
-            handle.write(updated)
-            handle.flush()
-            os.fsync(handle.fileno())
-        source_auth.chmod(0o600)
-    except (OSError, PermissionError) as exc:
-        # Do not turn a successful model completion into a false provider
-        # failure. Health and deployment verification expose whether the live
-        # source file is writable; the next restart then fails closed if it is
-        # not aligned with this contract.
-        print(json.dumps({"event": "codex_auth_sync_failed", "error": type(exc).__name__}, sort_keys=True), flush=True)
+        source_home = SOURCE_CODEX_HOME.resolve(strict=True)
+        source_path = source_auth.resolve(strict=True)
+        status["canonical_path"] = (
+            not source_auth.is_symlink()
+            and source_path == source_home / "auth.json"
+        )
+        metadata = source_auth.stat()
+        status["file_present"] = True
+        status["regular_file"] = stat.S_ISREG(metadata.st_mode)
+        status["owner"] = metadata.st_uid == 0 and metadata.st_gid == 0
+        status["permissions"] = stat.S_IMODE(metadata.st_mode) == 0o600
+        status["writable"] = os.access(source_auth, os.W_OK)
+        value = json.loads(source_auth.read_text(encoding="utf-8"))
+        tokens = value.get("tokens") if isinstance(value, dict) else None
+        status["json_valid"] = (
+            isinstance(value, dict)
+            and isinstance(tokens, dict)
+            and bool(str(tokens.get("access_token") or "").strip())
+            and bool(str(tokens.get("refresh_token") or "").strip())
+        )
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        pass
+    status["valid"] = all(
+        status[key]
+        for key in (
+            "file_present",
+            "canonical_path",
+            "regular_file",
+            "owner",
+            "permissions",
+            "writable",
+            "json_valid",
+        )
+    )
+    return status
+
+
+def _prepare_runtime_home() -> None:
+    """Validate shared auth and prepare only the non-secret process HOME."""
+    RUNTIME_CODEX_HOME.mkdir(parents=True, exist_ok=True)
+    status = _shared_auth_status()
+    if not status["file_present"] or not status["canonical_path"]:
+        raise HTTPException(
+            status_code=503,
+            detail="codex authentication must come from the shared Codex directory",
+        )
+    if not status["valid"]:
+        raise HTTPException(status_code=503, detail="codex authentication is invalid or unavailable")
+    # CODEX_HOME points directly at SOURCE_CODEX_HOME. Never copy auth.json,
+    # create a symlink, or restore a stale runtime-home credential here.
 
 
 def _codex_reasoning_effort(value: Any) -> str | None:
@@ -482,8 +504,8 @@ async def _run_codex_once(
     image_inputs: list[str] | None = None,
 ) -> CodexRun:
     # Codex may rotate the refresh token while servicing a request. Serialize
-    # access to the shared runtime auth so concurrent Windmill QA calls cannot
-    # overwrite one another with stale token state.
+    # access to the canonical shared auth file so concurrent Windmill QA calls
+    # do not race one another's token rotation.
     async with AUTH_SYNC_LOCK:
         return await _run_codex_once_impl(
             prompt,
@@ -542,11 +564,10 @@ async def _run_codex_once_impl(
         }, sort_keys=True))
 
         env = os.environ.copy()
-        env["CODEX_HOME"] = str(RUNTIME_CODEX_HOME)
-        # The Coolify entrypoint drops to UID 10001 but inherits the image's
-        # root HOME. Codex uses HOME for its app-server/path-alias bootstrap
-        # even with --ignore-user-config; point it at the same writable,
-        # session-scoped runtime home to avoid Permission denied startup.
+        env["CODEX_HOME"] = str(SOURCE_CODEX_HOME)
+        # Keep non-auth CLI bootstrap/cache files in the disposable runtime
+        # HOME. --ignore-user-config prevents the shared Codex directory from
+        # loading host MCP/configuration state, while auth remains canonical.
         env["HOME"] = str(RUNTIME_CODEX_HOME)
         env.pop("OPENAI_API_KEY", None)
 
@@ -559,17 +580,14 @@ async def _run_codex_once_impl(
             cwd=tmp_dir,
         )
         try:
-            try:
-                stdout, stderr = await asyncio.wait_for(
-                    process.communicate(prompt.encode("utf-8")),
-                    timeout=TIMEOUT_SECONDS,
-                )
-            except TimeoutError:
-                process.kill()
-                await process.communicate()
-                raise HTTPException(status_code=504, detail="codex execution timed out")
-        finally:
-            _sync_runtime_auth_to_source()
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(prompt.encode("utf-8")),
+                timeout=TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            process.kill()
+            await process.communicate()
+            raise HTTPException(status_code=504, detail="codex execution timed out")
 
         stdout_text = stdout.decode("utf-8", errors="replace").strip()
         error_text = stderr.decode("utf-8", errors="replace").strip()
@@ -648,8 +666,9 @@ async def _run_codex(
 
 @app.get("/healthz")
 async def healthz() -> dict[str, Any]:
-    return {
-        "ok": shutil.which(CODEX_BINARY) is not None and CODEX_AUTH_SOURCE.is_file(),
+    auth = _shared_auth_status()
+    result = {
+        "ok": shutil.which(CODEX_BINARY) is not None and auth["valid"],
         "provider": "official-codex-cli",
         "binary": CODEX_BINARY,
         "max_concurrency": MAX_CONCURRENCY,
@@ -665,27 +684,35 @@ async def healthz() -> dict[str, Any]:
         "max_image_inputs": MAX_IMAGE_INPUTS,
         "max_image_bytes": MAX_IMAGE_BYTES,
         "sandbox": "read-only",
-        "auth_source_file_present": CODEX_AUTH_SOURCE.is_file(),
-        "auth_source_writable": os.access(CODEX_AUTH_SOURCE, os.W_OK),
+        "auth_source_file_present": auth["file_present"],
+        "auth_source_writable": auth["writable"],
+        "auth_source_canonical": auth["canonical_path"],
+        "auth_source_owner": auth["owner"],
+        "auth_source_permissions": auth["permissions"],
+        "auth_json_valid": auth["json_valid"],
         "runtime_home": str(RUNTIME_CODEX_HOME),
-        "auth_persistence": "shared_server_session_file_rw",
+        "auth_persistence": "shared_codex_directory_rw",
     }
+    if not result["ok"]:
+        return JSONResponse(status_code=503, content=result)
+    return result
 
 
 @app.post("/v1/images/generations")
 async def image_generations(payload: dict[str, Any], authorization: str | None = Header(default=None)) -> Response:
     _authorize(authorization)
     _prepare_runtime_home()
-    try:
-        upstream = await generate_codex_image(
-            payload,
-            RUNTIME_CODEX_HOME / "auth.json",
-            timeout_seconds=TIMEOUT_SECONDS,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    async with AUTH_SYNC_LOCK:
+        try:
+            upstream = await generate_codex_image(
+                payload,
+                CODEX_AUTH_SOURCE,
+                timeout_seconds=TIMEOUT_SECONDS,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
     return Response(
         content=upstream.content,
         status_code=upstream.status_code,

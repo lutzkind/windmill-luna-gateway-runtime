@@ -152,34 +152,89 @@ def test_none_reasoning_maps_to_codex_minimal():
     assert codex_upstream._codex_reasoning_effort("low") == "low"
 
 
-def test_runtime_home_uses_bootstrapped_auth_without_reading_source_mount(monkeypatch: pytest.MonkeyPatch, tmp_path):
+def _write_valid_auth(path: Path, access: str = "access", refresh: str = "refresh") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"tokens": {"access_token": access, "refresh_token": refresh}}),
+        encoding="utf-8",
+    )
+    path.chmod(0o600)
+
+
+def test_runtime_home_never_bootstraps_or_copies_auth(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    source_home = tmp_path / "shared-codex"
+    source_auth = source_home / "auth.json"
+    _write_valid_auth(source_auth)
     runtime_home = tmp_path / "runtime-home"
     runtime_home.mkdir()
-    target_auth = runtime_home / "auth.json"
-    target_auth.write_text('{"bootstrapped":true}', encoding="utf-8")
+    stale_runtime_auth = runtime_home / "auth.json"
+    stale_runtime_auth.write_text("stale-runtime-marker", encoding="utf-8")
 
-    monkeypatch.setattr(codex_upstream, "RUNTIME_CODEX_HOME", runtime_home)
-    monkeypatch.setattr(codex_upstream, "CODEX_AUTH_SOURCE", tmp_path / "root-owned-source.json")
-
-    codex_upstream._prepare_runtime_home()
-
-    assert target_auth.read_text(encoding="utf-8") == '{"bootstrapped":true}'
-
-
-def test_rotated_runtime_auth_is_persisted_to_shared_server_session(monkeypatch: pytest.MonkeyPatch, tmp_path):
-    source_auth = tmp_path / "shared" / "auth.json"
-    source_auth.parent.mkdir()
-    source_auth.write_text('{"token":"old"}', encoding="utf-8")
-    runtime_home = tmp_path / "runtime"
-    runtime_home.mkdir()
-    (runtime_home / "auth.json").write_text('{"token":"rotated"}', encoding="utf-8")
-
+    monkeypatch.setattr(codex_upstream, "SOURCE_CODEX_HOME", source_home)
     monkeypatch.setattr(codex_upstream, "CODEX_AUTH_SOURCE", source_auth)
     monkeypatch.setattr(codex_upstream, "RUNTIME_CODEX_HOME", runtime_home)
 
-    codex_upstream._sync_runtime_auth_to_source()
+    codex_upstream._prepare_runtime_home()
 
-    assert source_auth.read_text(encoding="utf-8") == '{"token":"rotated"}'
+    assert stale_runtime_auth.read_text(encoding="utf-8") == "stale-runtime-marker"
+    assert codex_upstream._shared_auth_status()["valid"]
+
+
+def test_missing_auth_cannot_resurrect_stale_runtime_credential(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    source_home = tmp_path / "shared-codex"
+    source_home.mkdir()
+    source_auth = source_home / "auth.json"
+    runtime_home = tmp_path / "runtime"
+    runtime_home.mkdir()
+    stale_runtime_auth = runtime_home / "auth.json"
+    stale_runtime_auth.write_text("stale-runtime-marker", encoding="utf-8")
+
+    monkeypatch.setattr(codex_upstream, "SOURCE_CODEX_HOME", source_home)
+    monkeypatch.setattr(codex_upstream, "CODEX_AUTH_SOURCE", source_auth)
+    monkeypatch.setattr(codex_upstream, "RUNTIME_CODEX_HOME", runtime_home)
+
+    with pytest.raises(HTTPException, match="shared Codex directory"):
+        codex_upstream._prepare_runtime_home()
+    assert stale_runtime_auth.read_text(encoding="utf-8") == "stale-runtime-marker"
+
+
+def test_invalid_auth_fails_closed_without_logging_secret_content(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    source_home = tmp_path / "shared-codex"
+    source_auth = source_home / "auth.json"
+    source_home.mkdir()
+    source_auth.write_text("not-json-secret-marker", encoding="utf-8")
+    source_auth.chmod(0o600)
+    runtime_home = tmp_path / "runtime"
+
+    monkeypatch.setattr(codex_upstream, "SOURCE_CODEX_HOME", source_home)
+    monkeypatch.setattr(codex_upstream, "CODEX_AUTH_SOURCE", source_auth)
+    monkeypatch.setattr(codex_upstream, "RUNTIME_CODEX_HOME", runtime_home)
+
+    with pytest.raises(HTTPException, match="invalid or unavailable") as exc_info:
+        codex_upstream._prepare_runtime_home()
+    assert "not-json-secret-marker" not in str(exc_info.value)
+    assert not codex_upstream._shared_auth_status()["valid"]
+
+
+def test_health_fails_when_shared_auth_is_invalid_without_exposing_content(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    source_home = tmp_path / "shared-codex"
+    source_auth = source_home / "auth.json"
+    source_home.mkdir()
+    source_auth.write_text("health-secret-marker", encoding="utf-8")
+    source_auth.chmod(0o600)
+    monkeypatch.setattr(codex_upstream, "SOURCE_CODEX_HOME", source_home)
+    monkeypatch.setattr(codex_upstream, "CODEX_AUTH_SOURCE", source_auth)
+    monkeypatch.setattr(codex_upstream, "CODEX_BINARY", "sh")
+
+    health = asyncio.run(codex_upstream.healthz())
+
+    assert health.status_code == 503
+    body = json.loads(health.body)
+    assert body["ok"] is False
+    assert body["auth_json_valid"] is False
+    assert "health-secret-marker" not in health.body.decode()
 
 
 def test_open_json_object_contract_is_validated_without_cli_schema():
