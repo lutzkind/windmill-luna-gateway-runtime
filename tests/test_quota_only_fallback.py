@@ -107,6 +107,7 @@ def test_response_bearing_nonquota_failures_never_fallback():
     cases = [
         (502, "Selected model is at capacity"),
         (502, "Bad Gateway"),
+        (502, "upstream Codex authentication failed: refresh_token_reused"),
         (429, "rate limit reached"),
         (401, "Codex authentication failed"),
     ]
