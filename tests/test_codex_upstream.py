@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -161,6 +162,10 @@ def _write_valid_auth(path: Path, access: str = "access", refresh: str = "refres
     path.chmod(0o600)
 
 
+@pytest.mark.skipif(
+    os.geteuid() != 0,
+    reason="the shared auth contract requires a root-owned canonical auth file",
+)
 def test_runtime_home_never_bootstraps_or_copies_auth(monkeypatch: pytest.MonkeyPatch, tmp_path):
     source_home = tmp_path / "shared-codex"
     source_auth = source_home / "auth.json"
