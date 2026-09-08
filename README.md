@@ -13,6 +13,22 @@ Standalone OpenAI-compatible gateway for Windmill. It is unrelated to and fully 
 
 Windmill authenticates to the gateway with an internal bearer [REDACTED] SHA-256 fingerprint is allowlisted. For Luna quota fallback, the gateway uses its server-side `OPENAI_API_KEY`; the internal Windmill bearer [REDACTED] never forwarded to OpenAI.
 
+The Codex sidecar uses the host's canonical `/root/.codex` directory through
+the `/run/codex-session` directory bind. `CODEX_HOME` points directly at that
+directory and `CODEX_AUTH_SOURCE` is its `auth.json`; no Coolify-managed
+single-file secret mount, startup copy, symlink, or runtime-to-host auth sync
+is allowed. This is required because Codex login and refresh replace
+`auth.json` atomically. The sidecar normalizes the canonical file to
+root-owned `0600` before dropping all Linux capabilities, keeps disposable
+non-auth bootstrap files under `LUNA_CODEX_HOME`, and fails closed when the
+shared file is missing, malformed, non-canonical, or has unsafe ownership or
+permissions. Restart, redeploy, and container recreation therefore reopen the
+same host-backed path rather than restoring a stored credential snapshot.
+
+The `/healthz` response reports only non-secret auth presence, ownership,
+permissions, canonical-path, writability, and JSON-validity facts. It never
+prints token contents.
+
 ## Endpoints
 
 - `POST /v1/chat/completions`

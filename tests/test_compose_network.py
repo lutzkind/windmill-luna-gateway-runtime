@@ -21,7 +21,7 @@ def test_gateway_containers_are_least_privilege():
     assert "read_only: true" in text
     assert "no-new-privileges:true" in text
     assert "cap_drop: [ALL]" in text
-    assert "CODEX_HOME: /tmp/luna-codex-home" in text
+    assert "CODEX_HOME: /run/codex-session" in text
     assert "LUNA_CODEX_HOME: /tmp/luna-codex-home" in text
     assert "CODEX_AUTH_SOURCE: /run/codex-session/auth.json" in text
     assert "/root/.codex:/run/codex-session:rw" in text
@@ -29,8 +29,8 @@ def test_gateway_containers_are_least_privilege():
     assert "chown 10001:0 /tmp/luna-codex-home" in dockerfile_text
     assert "chmod 0770 /tmp/luna-codex-home" in dockerfile_text
     entrypoint_text = (Path(__file__).parents[1] / "runtime-entrypoint.sh").read_text(encoding="utf-8")
-    assert 'chown "$runtime_uid:0" "$codex_home"' in entrypoint_text
-    assert 'chmod 0770 "$codex_home"' in entrypoint_text
+    assert 'chown "$runtime_uid:0" "$runtime_home"' in entrypoint_text
+    assert 'chmod 0770 "$runtime_home"' in entrypoint_text
     assert "--bounding-set=-all" in entrypoint_text
     assert "--inh-caps=-all" in entrypoint_text
     assert "--ambient-caps=-all" in entrypoint_text
@@ -41,7 +41,7 @@ def test_codex_auth_refreshes_persist_without_coolify_file_snapshots():
     text = COMPOSE.read_text(encoding="utf-8")
     entrypoint = (Path(__file__).parents[1] / "runtime-entrypoint.sh").read_text(encoding="utf-8")
 
-    assert "CODEX_HOME: /tmp/luna-codex-home" in text
+    assert "CODEX_HOME: /run/codex-session" in text
     assert "LUNA_CODEX_HOME: /tmp/luna-codex-home" in text
     assert "CODEX_AUTH_SOURCE: /run/codex-session/auth.json" in text
     assert "/root/.codex:/run/codex-session:rw" in text
@@ -49,8 +49,9 @@ def test_codex_auth_refreshes_persist_without_coolify_file_snapshots():
     assert "/root/.codex-gateway/auth.json" not in text
     assert 'chown "$runtime_uid:$runtime_gid" "$auth_source"' not in entrypoint
     assert 'chown 0:0 "$auth_source"' in entrypoint
-    assert 'ln -s "$auth_source" "$auth_target"' in entrypoint
+    assert 'ln -s "$auth_source" "$auth_target"' not in entrypoint
     assert 'cp "$auth_source" "$auth_target"' not in entrypoint
+    assert '"$auth_source" != "$auth_target"' in entrypoint
 
 
 def test_codex_auth_survives_future_host_login_atomic_replacement():
@@ -69,3 +70,20 @@ def test_codex_auth_survives_future_host_login_atomic_replacement():
     assert "--inh-caps=-all" in entrypoint
     assert "--ambient-caps=-all" in entrypoint
     assert "--nnp" in entrypoint
+
+
+def test_only_the_canonical_codex_directory_can_be_the_auth_source():
+    text = COMPOSE.read_text(encoding="utf-8")
+    entrypoint = (Path(__file__).parents[1] / "runtime-entrypoint.sh").read_text(encoding="utf-8")
+    upstream = (Path(__file__).parents[1] / "app/codex_upstream.py").read_text(encoding="utf-8")
+
+    assert "CODEX_HOME: /run/codex-session" in text
+    assert "CODEX_AUTH_SOURCE: /run/codex-session/auth.json" in text
+    assert "/root/.codex:/run/codex-session:rw" in text
+    assert "/root/.codex/auth.json:/run/secrets/codex-auth.json:rw" not in text
+    assert "/run/secrets/codex-auth.json" not in text
+    assert "auth_source" in entrypoint
+    assert "source_path == source_home / \"auth.json\"" in upstream
+    assert "copy2" not in upstream
+    assert "_sync_runtime_auth_to_source" not in upstream
+    assert "RUNTIME_CODEX_HOME / \"auth.json\"" not in upstream

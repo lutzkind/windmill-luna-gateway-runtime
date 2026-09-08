@@ -14,8 +14,9 @@ services:
       - /tmp:rw,nosuid,nodev,size=512m
     environment:
       # Keep the current server ChatGPT/Codex session as the single auth
-      # source, while Codex itself uses a clean writable runtime home.
-      CODEX_HOME: /tmp/luna-codex-home
+      # source. CODEX_HOME itself is the directory bind so Codex atomic
+      # auth.json replacement remains on the canonical host directory.
+      CODEX_HOME: /run/codex-session
       LUNA_CODEX_HOME: /tmp/luna-codex-home
       CODEX_AUTH_SOURCE: /run/codex-session/auth.json
       CODEX_BINARY: codex
@@ -24,9 +25,8 @@ services:
       OPENAI_VIA_CODEX_API_KEY: internal-codex-sidecar-v1
     volumes:
       # Bind the host Codex directory, not auth.json as a Coolify-managed file.
-      # Codex refreshes auth.json with atomic replacement, and the directory bind
-      # keeps every consumer on the same host-backed inode without a stale secret
-      # snapshot being persisted by Coolify.
+      # Codex refreshes auth.json with atomic replacement, so the CLI must use
+      # this directory directly rather than a symlink or private copy.
       - /root/.codex:/run/codex-session:rw
     expose: ["18080"]
     networks: [gateway-private]
