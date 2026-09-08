@@ -9,6 +9,6 @@ permissions:
 jobs:
   retired:
     if: ${{ false }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, ci, isolated]
     steps:
       - run: echo "Retired workflow; no action performed."
