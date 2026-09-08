@@ -1,6 +1,7 @@
 name: CI
 on:
   pull_request:
+  workflow_dispatch:
 concurrency:
   group: windmill-luna-gateway-runtime-ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
