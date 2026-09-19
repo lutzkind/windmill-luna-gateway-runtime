@@ -166,7 +166,7 @@ def test_api_only_model_and_media_passthrough():
         if request.url.path.endswith("/audio/speech"):
             return httpx.Response(200, content=b"audio-bytes", headers={"content-type": "audio/mpeg"})
         return httpx.Response(200, json=success("api-only"))
-    with client_for(handler) as client:
+    with client_for(handler, allowed_models=frozenset({"gpt-5.6-luna", "luna-auto", "gpt-5-mini"})) as client:
         model_response = client.post("/v1/chat/completions", headers=headers(), json={"model": "gpt-5-mini", "messages": []})
         speech_response = client.post("/v1/audio/speech", headers={**headers(), "Content-Type": "application/json"}, content=b'{"model":"gpt-4o-mini-tts","input":"hi"}')
         blocked = client.post("/v1/files", headers=headers(), content=b"x")
@@ -404,6 +404,105 @@ def test_image_quota_falls_back_without_opening_text_circuit():
     assert text.headers["x-luna-gateway-provider"] == "codex"
     assert health["image_circuit"]["open"] is True
     assert health["circuit"]["open"] is False
+
+
+def test_model_allowlist_rejects_unlisted_models_before_provider_calls():
+    def handler(request):
+        raise AssertionError("provider called")
+
+    with client_for(handler) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            headers=headers(),
+            json={"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        responses_response = client.post(
+            "/v1/responses",
+            headers=headers(),
+            json={"model": "gpt-4o", "input": "hi"},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "model_not_allowed"
+    assert responses_response.status_code == 400
+    assert responses_response.json()["detail"] == "model_not_allowed"
+
+
+def test_model_allowlist_accepts_alias_targets_and_canonical_names():
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(200, json=success())
+
+    with client_for(handler, allowed_models=frozenset({"gpt-5.6-luna"})) as client:
+        aliased = client.post("/v1/chat/completions", headers=headers(), json=payload())
+        canonical = client.post(
+            "/v1/chat/completions",
+            headers=headers(),
+            json={"model": "gpt-5.6-luna", "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+    assert aliased.status_code == 200
+    assert canonical.status_code == 200
+    assert seen == [
+        "https://codex.test/v1/chat/completions",
+        "https://codex.test/v1/chat/completions",
+    ]
+
+
+def test_model_allowlist_fails_closed_for_unlisted_alias_targets():
+    def handler(request):
+        raise AssertionError("provider called")
+
+    with client_for(
+        handler,
+        allowed_models=frozenset({"gpt-5.6-luna"}),
+        model_aliases={"luna-auto": "gpt-4o"},
+    ) as client:
+        response = client.post("/v1/chat/completions", headers=headers(), json=payload())
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "model_not_allowed"
+
+
+def test_empty_model_allowlist_disables_enforcement():
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(200, json=success("api-only"))
+
+    with client_for(
+        handler,
+        allowed_models=frozenset(),
+        server_openai_api_key="server-api-secret",
+    ) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            headers=headers(),
+            json={"model": "gpt-5-mini", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        health = client.get("/health").json()
+
+    assert response.status_code == 200
+    assert response.headers["x-luna-gateway-provider"] == "openai-api"
+    assert seen == ["https://api.test/v1/chat/completions"]
+    assert health["model_allowlist_enforced"] is False
+
+
+def test_model_allowlist_defaults_and_health_flag(monkeypatch):
+    monkeypatch.delenv("ALLOWED_MODELS", raising=False)
+    assert Settings.from_env().allowed_models == frozenset({"gpt-5.6-luna", "luna-auto"})
+    monkeypatch.setenv("ALLOWED_MODELS", "")
+    assert Settings.from_env().allowed_models == frozenset()
+
+    def handler(request):
+        raise AssertionError("provider called")
+
+    with client_for(handler) as client:
+        health = client.get("/health").json()
+    assert health["model_allowlist_enforced"] is True
 
 
 def test_codex_image_client_error_does_not_use_paid_fallback():
