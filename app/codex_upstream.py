@@ -9,7 +9,6 @@ import shutil
 import stat
 import tempfile
 import time
-from urllib.parse import urlparse
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,6 +19,7 @@ from fastapi import FastAPI, Header, HTTPException, Response
 from fastapi.responses import JSONResponse
 
 from app.codex_image import generate_codex_image
+from app.outbound_url import OutboundURLRejected, fetch_outbound
 
 app = FastAPI(title="Codex CLI OpenAI-compatible upstream", version="1.3.0")
 
@@ -41,6 +41,23 @@ WEB_SEARCH_TOOL_TYPES = frozenset({"web_search"})
 MAX_IMAGE_INPUTS = max(1, min(8, int(os.environ.get("CODEX_MAX_IMAGE_INPUTS", "8"))))
 MAX_IMAGE_BYTES = max(1_048_576, min(20 * 1024 * 1024, int(os.environ.get("CODEX_MAX_IMAGE_BYTES", str(15 * 1024 * 1024)))))
 IMAGE_FETCH_TIMEOUT_SECONDS = max(5.0, min(60.0, float(os.environ.get("CODEX_IMAGE_FETCH_TIMEOUT_SECONDS", "30"))))
+IMAGE_MAX_REDIRECTS = max(0, min(10, int(os.environ.get("CODEX_IMAGE_MAX_REDIRECTS", "5"))))
+IMAGE_FETCH_REJECTION_DETAILS = {
+    "unsupported_scheme": "unsupported_image_url",
+    "url_credentials": "unsupported_image_url",
+    "missing_url": "unsupported_image_url",
+    "invalid_url": "unsupported_image_url",
+    "invalid_hostname": "unsupported_image_url",
+    "hostname_not_allowed": "unsupported_image_url",
+    "dns_failure": "image_url_fetch_failed",
+    "address_not_public": "image_url_blocked",
+    "peer_address_mismatch": "image_url_blocked",
+    "fetch_timeout": "image_url_fetch_failed",
+    "fetch_failed": "image_url_fetch_failed",
+    "redirect_without_location": "image_url_fetch_failed",
+    "too_many_redirects": "image_url_redirect_blocked",
+    "response_too_large": "image_input_too_large",
+}
 IMAGE_MIME_SUFFIXES = {
     "image/jpeg": ".jpg",
     "image/png": ".png",
@@ -376,33 +393,24 @@ def _image_type_from_bytes(content: bytes, content_type: str = "") -> tuple[str,
 
 
 async def _fetch_image_url(source: str) -> tuple[bytes, str, str]:
-    parsed = urlparse(source)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise HTTPException(status_code=400, detail="unsupported_image_url")
     try:
-        async with httpx.AsyncClient(
-            timeout=IMAGE_FETCH_TIMEOUT_SECONDS,
-            follow_redirects=True,
-        ) as client:
-            async with client.stream("GET", source) as response:
-                if response.status_code < 200 or response.status_code >= 300:
-                    raise HTTPException(status_code=400, detail="image_url_fetch_failed")
-                chunks: list[bytes] = []
-                total = 0
-                async for chunk in response.aiter_bytes():
-                    total += len(chunk)
-                    if total > MAX_IMAGE_BYTES:
-                        raise HTTPException(status_code=413, detail="image_input_too_large")
-                    chunks.append(chunk)
-                content = b"".join(chunks)
-                image_type = _image_type_from_bytes(content, response.headers.get("content-type", ""))
-    except HTTPException:
-        raise
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=400, detail="image_url_fetch_failed") from exc
+        fetched = await fetch_outbound(
+            source,
+            max_bytes=MAX_IMAGE_BYTES,
+            timeout_seconds=IMAGE_FETCH_TIMEOUT_SECONDS,
+            max_redirects=IMAGE_MAX_REDIRECTS,
+        )
+    except OutboundURLRejected as exc:
+        detail = IMAGE_FETCH_REJECTION_DETAILS.get(exc.code, "image_url_fetch_failed")
+        raise HTTPException(status_code=exc.status_code, detail=detail) from exc
+    if fetched.status_code < 200 or fetched.status_code >= 300:
+        raise HTTPException(status_code=400, detail="image_url_fetch_failed")
+    image_type = _image_type_from_bytes(
+        fetched.content, fetched.headers.get("content-type", "")
+    )
     if image_type is None:
         raise HTTPException(status_code=400, detail="unsupported_image_type")
-    return content, image_type[0], image_type[1]
+    return fetched.content, image_type[0], image_type[1]
 
 
 async def _materialize_image_inputs(sources: list[str], tmp_path: Path) -> list[Path]:

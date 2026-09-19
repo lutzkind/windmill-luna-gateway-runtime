@@ -10,6 +10,7 @@ import pytest
 from fastapi import HTTPException
 
 from app import codex_upstream
+from app.outbound_url import OutboundResponse, OutboundURLRejected
 
 
 def test_codex_command_forwards_model_and_reasoning_effort():
@@ -282,6 +283,102 @@ def test_json_object_parser_rejects_non_object():
             asyncio.run(codex_upstream._run_codex("return an object", require_json=True))
     finally:
         codex_upstream._run_codex_once = original
+
+
+def test_fetch_image_url_uses_shared_guarded_fetch(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, object] = {}
+
+    async def fake_fetch(source: str, **kwargs: object) -> OutboundResponse:
+        captured["source"] = source
+        captured.update(kwargs)
+        return OutboundResponse(
+            status_code=200,
+            headers={"content-type": "image/png"},
+            content=b"\x89PNG\r\n\x1a\n" + b"data",
+            url="https://images.example/a.png",
+        )
+
+    monkeypatch.setattr(codex_upstream, "fetch_outbound", fake_fetch)
+    content, mime, suffix = asyncio.run(
+        codex_upstream._fetch_image_url("https://images.example/a.png")
+    )
+
+    assert (content, mime, suffix) == (b"\x89PNG\r\n\x1a\ndata", "image/png", ".png")
+    assert captured["source"] == "https://images.example/a.png"
+    assert captured["max_bytes"] == codex_upstream.MAX_IMAGE_BYTES
+    assert captured["timeout_seconds"] == codex_upstream.IMAGE_FETCH_TIMEOUT_SECONDS
+    assert captured["max_redirects"] == codex_upstream.IMAGE_MAX_REDIRECTS
+
+
+@pytest.mark.parametrize(
+    "code,status,detail",
+    [
+        ("address_not_public", 400, "image_url_blocked"),
+        ("peer_address_mismatch", 400, "image_url_blocked"),
+        ("unsupported_scheme", 400, "unsupported_image_url"),
+        ("url_credentials", 400, "unsupported_image_url"),
+        ("too_many_redirects", 400, "image_url_redirect_blocked"),
+        ("response_too_large", 413, "image_input_too_large"),
+        ("dns_failure", 400, "image_url_fetch_failed"),
+    ],
+)
+def test_fetch_image_url_maps_guard_rejections(
+    monkeypatch: pytest.MonkeyPatch, code: str, status: int, detail: str
+):
+    async def fake_fetch(source: str, **kwargs: object) -> OutboundResponse:
+        raise OutboundURLRejected(code, "rejected", status_code=status)
+
+    monkeypatch.setattr(codex_upstream, "fetch_outbound", fake_fetch)
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(codex_upstream._fetch_image_url("https://images.example/a.png"))
+
+    assert excinfo.value.status_code == status
+    assert excinfo.value.detail == detail
+
+
+def test_fetch_image_url_rejects_non_image_and_non_2xx_responses(monkeypatch: pytest.MonkeyPatch):
+    async def html_response(source: str, **kwargs: object) -> OutboundResponse:
+        return OutboundResponse(
+            status_code=200,
+            headers={"content-type": "text/html"},
+            content=b"<html></html>",
+            url="https://images.example/a.png",
+        )
+
+    monkeypatch.setattr(codex_upstream, "fetch_outbound", html_response)
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(codex_upstream._fetch_image_url("https://images.example/a.png"))
+    assert excinfo.value.detail == "unsupported_image_type"
+
+    async def not_found(source: str, **kwargs: object) -> OutboundResponse:
+        return OutboundResponse(
+            status_code=404,
+            headers={"content-type": "text/plain"},
+            content=b"missing",
+            url="https://images.example/a.png",
+        )
+
+    monkeypatch.setattr(codex_upstream, "fetch_outbound", not_found)
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(codex_upstream._fetch_image_url("https://images.example/a.png"))
+    assert excinfo.value.detail == "image_url_fetch_failed"
+
+
+def test_materialize_image_inputs_uses_guarded_remote_fetch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    async def fake_fetch(source: str) -> tuple[bytes, str, str]:
+        return b"\x89PNG\r\n\x1a\npayload", "image/png", ".png"
+
+    monkeypatch.setattr(codex_upstream, "_fetch_image_url", fake_fetch)
+    paths = asyncio.run(
+        codex_upstream._materialize_image_inputs(
+            ["https://images.example/a.png"], tmp_path
+        )
+    )
+
+    assert paths == [tmp_path / "input-image-1.png"]
+    assert paths[0].read_bytes() == b"\x89PNG\r\n\x1a\npayload"
 
 
 def test_codex_image_payload_normalizes_social_portrait_size():

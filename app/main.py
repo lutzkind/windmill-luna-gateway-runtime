@@ -345,8 +345,12 @@ class Gateway:
         if not isinstance(model, str) or not model.strip():
             raise HTTPException(status_code=400, detail="model is required")
         model = model.strip()
+        resolved_model = self.settings.model_aliases.get(model, model)
+        allowed_models = self.settings.allowed_models
+        if allowed_models and model not in allowed_models and resolved_model not in allowed_models:
+            raise HTTPException(status_code=400, detail="model_not_allowed")
         normalized = dict(payload)
-        normalized["model"] = self.settings.model_aliases.get(model, model)
+        normalized["model"] = resolved_model
         if normalized.get("stream") is True:
             raise HTTPException(
                 status_code=400, detail="streaming_not_supported"
@@ -1026,6 +1030,7 @@ def create_app(
             "allowed_caller_count": len(selected.allowed_api_key_sha256s),
             "max_body_bytes": selected.max_body_bytes,
             "codex_configured": bool(selected.codex_api_key),
+            "model_allowlist_enforced": bool(selected.allowed_models),
             "api_fallback": (
                 "caller_bearer_or_server"
                 if selected.server_openai_api_key
