@@ -81,7 +81,7 @@ class Settings:
     def from_env(cls) -> "Settings":
         aliases_raw = os.getenv(
             "MODEL_ALIASES_JSON",
-            '{"luna-auto":"gpt-5.6-luna","gpt-5.6-luna":"gpt-5.6-luna"}',
+            '{"luna-auto":"gpt-6-luna","gpt-6-luna":"gpt-6-luna"}',
         )
         aliases = json.loads(aliases_raw)
         if not isinstance(aliases, dict) or not all(
@@ -95,7 +95,7 @@ class Settings:
         allowed = frozenset(
             part.strip()
             for part in os.getenv(
-                "ALLOWED_MODELS", "gpt-5.6-luna,luna-auto"
+                "ALLOWED_MODELS", "gpt-6-luna,luna-auto"
             ).split(",")
             if part.strip()
         )

@@ -19,10 +19,10 @@ def settings(**overrides):
         codex_api_key="internal-codex-sidecar-v1",
         openai_url="https://api.test/v1",
         server_openai_api_key="server-openai-key",
-        allowed_models=frozenset({"gpt-5.6-luna", "luna-auto"}),
+        allowed_models=frozenset({"gpt-6-luna", "luna-auto"}),
         model_aliases={
-            "luna-auto": "gpt-5.6-luna",
-            "gpt-5.6-luna": "gpt-5.6-luna",
+            "luna-auto": "gpt-6-luna",
+            "gpt-6-luna": "gpt-6-luna",
         },
         timeout_seconds=10,
         max_body_bytes=1024 * 1024,

@@ -44,7 +44,7 @@ whose caller-supplied model, or the model its `MODEL_ALIASES_JSON` alias resolve
 listed is rejected with HTTP 400 `model_not_allowed` before any provider call. Aliases can
 therefore only route between allowlisted names; they cannot introduce a new model.
 
-When `ALLOWED_MODELS` is unset the default `gpt-5.6-luna,luna-auto` applies. An explicitly
+When `ALLOWED_MODELS` is unset the default `gpt-6-luna,luna-auto` applies. An explicitly
 empty value disables the allowlist; it exists only as a migration escape hatch and is not
 recommended. `GET /health` reports `model_allowlist_enforced` so the active mode is
 observable without exposing the list.
