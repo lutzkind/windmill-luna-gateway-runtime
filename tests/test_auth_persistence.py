@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 ENTRYPOINT = ROOT / "runtime-entrypoint.sh"
+SHARED_RUNTIME_GID = 10001
 
 pytestmark = pytest.mark.skipif(
     os.geteuid() != 0 or shutil.which("setpriv") is None,
@@ -33,8 +35,8 @@ def write_auth(path: Path, marker: str) -> None:
         ),
         encoding="utf-8",
     )
-    os.chown(path, 0, 0)
-    os.chmod(path, 0o600)
+    os.chown(path, 0, SHARED_RUNTIME_GID)
+    os.chmod(path, 0o660)
 
 
 def atomic_replace_auth(path: Path, marker: str) -> int:
@@ -170,9 +172,51 @@ def test_legacy_owner_and_permissions_are_normalized_before_drop(tmp_path: Path)
     )
     assert result.returncode == 0, result.stderr
     metadata = source_auth.stat()
-    assert (metadata.st_uid, metadata.st_gid) == (0, 0)
-    assert metadata.st_mode & 0o777 == 0o600
+    assert (metadata.st_uid, metadata.st_gid) == (0, SHARED_RUNTIME_GID)
+    assert metadata.st_mode & 0o777 == 0o660
     assert result.stdout.strip() == "0"
+
+
+def test_shared_runtime_group_and_mode_are_restored_after_writer_drift(tmp_path: Path):
+    source_home = tmp_path / "shared-codex"
+    source_auth = source_home / "auth.json"
+    write_auth(source_auth, "old")
+    runtime_home = tmp_path / "runtime-home"
+    marker = tmp_path / "ready"
+
+    process = subprocess.Popen(
+        [
+            "sh",
+            str(ENTRYPOINT),
+            "sh",
+            "-c",
+            f"touch {str(marker)!r}; sleep 8",
+        ],
+        env=runtime_env(source_home, runtime_home),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        for _ in range(50):
+            if marker.exists():
+                break
+            time.sleep(0.1)
+        assert marker.exists()
+        # Simulate another writer replacing the canonical file with root:root 0600.
+        os.chown(source_auth, 0, 0)
+        os.chmod(source_auth, 0o600)
+        repaired = False
+        for _ in range(40):
+            metadata = source_auth.stat()
+            if (metadata.st_uid, metadata.st_gid) == (0, SHARED_RUNTIME_GID) and metadata.st_mode & 0o777 == 0o660:
+                repaired = True
+                break
+            time.sleep(0.25)
+        assert repaired, source_auth.stat()
+    finally:
+        process.kill()
+        process.wait(timeout=5)
 
 
 def test_runtime_process_uses_private_umask_for_new_files(tmp_path: Path):

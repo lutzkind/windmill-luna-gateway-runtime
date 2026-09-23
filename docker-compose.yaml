@@ -62,8 +62,14 @@ services:
       CODEX_UPSTREAM_URL: http://codex-upstream:18080/v1
       OPENAI_API_BASE_URL: https://api.openai.com/v1
       OPENAI_API_KEY: "${OPENAI_API_KEY}"
-      ALLOWED_MODELS: gpt-6-luna,luna-auto
-      MODEL_ALIASES_JSON: '{"luna-auto":"gpt-6-luna","gpt-6-luna":"gpt-6-luna"}'
+      # Single canonical selected Luna model. `luna-auto` is the only
+      # caller-facing name; advance this value (via the scheduled
+      # f/admins/luna-model-upgrade-check job) instead of editing callers.
+      LUNA_AUTO_MODEL: "${LUNA_AUTO_MODEL:-gpt-6-luna}"
+      ALLOWED_MODELS: "luna-auto,${LUNA_AUTO_MODEL:-gpt-6-luna}"
+      MODEL_ALIASES_JSON: '{"luna-auto":"${LUNA_AUTO_MODEL:-gpt-6-luna}"}'
+      # Candidate-model validation for the scheduled Luna upgrade job.
+      ENABLE_MODEL_VALIDATION: "${ENABLE_MODEL_VALIDATION:-false}"
       PROVIDER_TIMEOUT_SECONDS: "180"
       # Multimodal Etsy QA carries bounded base64 image inputs. Keep this
       # separate from the larger passthrough limit and below the upstream's

@@ -160,7 +160,16 @@ def _write_valid_auth(path: Path, access: str = "access", refresh: str = "refres
         json.dumps({"tokens": {"access_token": access, "refresh_token": refresh}}),
         encoding="utf-8",
     )
-    path.chmod(0o600)
+    if os.geteuid() == 0:
+        os.chown(path, 0, codex_upstream.SHARED_RUNTIME_GID)
+        path.chmod(0o660)
+    else:
+        path.chmod(0o600)
+
+
+def test_shared_auth_contract_is_root_owned_with_shared_runtime_group():
+    assert codex_upstream.SHARED_AUTH_MODE == 0o660
+    assert codex_upstream.SHARED_RUNTIME_GID > 0
 
 
 @pytest.mark.skipif(
@@ -204,9 +213,35 @@ def test_runtime_auth_mode_drift_is_repaired_without_restart(monkeypatch: pytest
 
     assert first["valid"] is True
     assert first["permissions_repaired"] is True
-    assert source_auth.stat().st_mode & 0o777 == 0o600
+    assert source_auth.stat().st_mode & 0o777 == 0o660
     assert second["valid"] is True
     assert second["permissions_repaired"] is False
+
+
+@pytest.mark.skipif(
+    os.geteuid() != 0,
+    reason="the shared auth contract requires a root-owned canonical auth file",
+)
+def test_runtime_auth_group_drift_fails_closed_until_the_supervisor_repairs_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    source_home = tmp_path / "shared-codex"
+    source_auth = source_home / "auth.json"
+    _write_valid_auth(source_auth)
+    os.chown(source_auth, 0, 0)
+    source_auth.chmod(0o600)
+
+    monkeypatch.setattr(codex_upstream, "SOURCE_CODEX_HOME", source_home)
+    monkeypatch.setattr(codex_upstream, "CODEX_AUTH_SOURCE", source_auth)
+
+    status = codex_upstream._shared_auth_status()
+
+    assert status["owner"] is True
+    assert status["group"] is False
+    assert status["valid"] is False
+    # The root entrypoint supervisor normalizes root:10001 0660; the sidecar
+    # itself must never silently accept an unsafe group.
+    assert source_auth.stat().st_mode & 0o777 == 0o600
 
 
 @pytest.mark.skipif(

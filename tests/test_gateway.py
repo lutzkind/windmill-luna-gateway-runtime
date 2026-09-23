@@ -542,3 +542,172 @@ def test_codex_image_client_error_does_not_use_paid_fallback():
     assert response.headers["x-luna-gateway-provider"] == "codex-image"
     assert response.headers["x-luna-gateway-fallback"] == "false"
     assert seen == ["https://codex.test/v1/images/generations"]
+
+
+def test_health_reports_canonical_luna_auto_mapping():
+    def handler(request):
+        if request.url.host == "codex.test" and request.url.path == "/healthz":
+            return httpx.Response(200, json={"ok": True})
+        raise AssertionError("provider called")
+
+    with client_for(handler) as client:
+        health = client.get("/health").json()
+
+    assert health["luna_auto_model"] == "gpt-6-luna"
+    assert health["model_aliases"] == {"gpt-6-luna": "gpt-6-luna", "luna-auto": "gpt-6-luna"}
+    assert health["reasoning_efforts"] == ["high", "low", "medium", "none"]
+    assert health["model_validation_enabled"] is False
+
+
+def test_luna_auto_and_concrete_model_produce_identical_reasoning_effort():
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json=success())
+
+    messages = [{"role": "user", "content": "hi"}]
+    with client_for(handler) as client:
+        assert client.post(
+            "/v1/chat/completions",
+            headers=headers(),
+            json={"model": "luna-auto", "messages": messages},
+        ).status_code == 200
+        assert client.post(
+            "/v1/chat/completions",
+            headers=headers(),
+            json={"model": "gpt-6-luna", "messages": messages},
+        ).status_code == 200
+
+    assert len(seen) == 2
+    assert seen[0]["model"] == seen[1]["model"] == "gpt-6-luna"
+    assert seen[0]["reasoning_effort"] == seen[1]["reasoning_effort"]
+
+
+def test_explicit_reasoning_effort_is_forwarded_unchanged_for_every_model_alias():
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json=success())
+
+    with client_for(handler) as client:
+        for model in ("luna-auto", "gpt-6-luna"):
+            response = client.post(
+                "/v1/chat/completions",
+                headers=headers(),
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "reasoning_effort": "high",
+                },
+            )
+            assert response.status_code == 200
+
+    assert [entry["reasoning_effort"] for entry in seen] == ["high", "high"]
+    assert [entry["model"] for entry in seen] == ["gpt-6-luna", "gpt-6-luna"]
+
+
+def test_validate_model_endpoint_is_hidden_until_enabled():
+    def handler(request):
+        raise AssertionError("provider called")
+
+    with client_for(handler) as client:
+        response = client.post(
+            "/admin/validate-model",
+            headers=headers(),
+            json={"model": "gpt-6-luna"},
+        )
+    assert response.status_code == 404
+
+
+def test_validate_model_endpoint_requires_allowlisted_caller():
+    def handler(request):
+        raise AssertionError("provider called")
+
+    with client_for(handler, enable_model_validation=True) as client:
+        unauthorized = client.post("/admin/validate-model", json={"model": "gpt-6-luna"})
+        wrong = client.post(
+            "/admin/validate-model",
+            headers=headers("wrong"),
+            json={"model": "gpt-6-luna"},
+        )
+    assert unauthorized.status_code == 401
+    assert wrong.status_code == 401
+
+
+def test_validate_model_checks_reasoning_levels_and_smoke_without_touching_aliases():
+    seen = []
+
+    def handler(request):
+        if request.url.host == "codex.test" and request.url.path == "/healthz":
+            return httpx.Response(200, json={"ok": True})
+        body = json.loads(request.content)
+        seen.append(body)
+        return httpx.Response(
+            200,
+            json=success("LUNA_SMOKE_OK"),
+        )
+
+    with client_for(handler, enable_model_validation=True) as client:
+        response = client.post(
+            "/admin/validate-model",
+            headers=headers(),
+            json={
+                "model": "gpt-7-luna",
+                "reasoning_efforts": ["low", "high"],
+                "smoke": True,
+            },
+        )
+        health = client.get("/health").json()
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["ok"] is True
+    assert result["model"] == "gpt-7-luna"
+    assert result["checks"]["reasoning_efforts"]["low"]["ok"] is True
+    assert result["checks"]["reasoning_efforts"]["high"]["ok"] is True
+    assert result["checks"]["smoke"]["ok"] is True
+    assert [entry.get("reasoning_effort") for entry in seen] == ["low", "high", None]
+    assert {entry["model"] for entry in seen} == {"gpt-7-luna"}
+    # Validation must never advance the active routing mapping.
+    assert health["luna_auto_model"] == "gpt-6-luna"
+
+
+def test_validate_model_reports_failure_and_keeps_mapping():
+    def handler(request):
+        if request.url.host == "codex.test" and request.url.path == "/healthz":
+            return httpx.Response(200, json={"ok": True})
+        return httpx.Response(400, json={"error": {"message": "model is not supported"}})
+
+    with client_for(handler, enable_model_validation=True) as client:
+        response = client.post(
+            "/admin/validate-model",
+            headers=headers(),
+            json={"model": "gpt-9-luna", "reasoning_efforts": ["low"], "smoke": True},
+        )
+        health = client.get("/health").json()
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["ok"] is False
+    assert "reasoning_effort_failed:low" in result["errors"]
+    assert "smoke_test_failed" in result["errors"]
+    assert health["luna_auto_model"] == "gpt-6-luna"
+
+
+def test_validate_model_rejects_invalid_candidates():
+    def handler(request):
+        if request.url.host == "codex.test" and request.url.path == "/healthz":
+            return httpx.Response(200, json={"ok": True})
+        raise AssertionError("provider called")
+
+    with client_for(handler, enable_model_validation=True) as client:
+        bad_model = client.post("/admin/validate-model", headers=headers(), json={"model": "../etc/passwd"})
+        bad_effort = client.post(
+            "/admin/validate-model",
+            headers=headers(),
+            json={"model": "gpt-6-luna", "reasoning_efforts": ["extreme"]},
+        )
+    assert bad_model.status_code == 400
+    assert bad_effort.status_code == 400
