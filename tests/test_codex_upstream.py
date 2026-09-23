@@ -186,6 +186,51 @@ def test_runtime_home_never_bootstraps_or_copies_auth(monkeypatch: pytest.Monkey
     assert codex_upstream._shared_auth_status()["valid"]
 
 
+@pytest.mark.skipif(
+    os.geteuid() != 0,
+    reason="the shared auth contract requires a root-owned canonical auth file",
+)
+def test_runtime_auth_mode_drift_is_repaired_without_restart(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    source_home = tmp_path / "shared-codex"
+    source_auth = source_home / "auth.json"
+    _write_valid_auth(source_auth)
+    source_auth.chmod(0o644)
+
+    monkeypatch.setattr(codex_upstream, "SOURCE_CODEX_HOME", source_home)
+    monkeypatch.setattr(codex_upstream, "CODEX_AUTH_SOURCE", source_auth)
+
+    first = codex_upstream._shared_auth_status()
+    second = codex_upstream._shared_auth_status()
+
+    assert first["valid"] is True
+    assert first["permissions_repaired"] is True
+    assert source_auth.stat().st_mode & 0o777 == 0o600
+    assert second["valid"] is True
+    assert second["permissions_repaired"] is False
+
+
+@pytest.mark.skipif(
+    os.geteuid() != 0,
+    reason="the shared auth contract requires a root-owned canonical auth file",
+)
+def test_runtime_auth_mode_repair_does_not_mask_unsafe_owner(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    source_home = tmp_path / "shared-codex"
+    source_auth = source_home / "auth.json"
+    _write_valid_auth(source_auth)
+    os.chown(source_auth, 10001, 10001)
+    source_auth.chmod(0o644)
+
+    monkeypatch.setattr(codex_upstream, "SOURCE_CODEX_HOME", source_home)
+    monkeypatch.setattr(codex_upstream, "CODEX_AUTH_SOURCE", source_auth)
+
+    status = codex_upstream._shared_auth_status()
+
+    assert status["valid"] is False
+    assert status["owner"] is False
+    assert status["permissions_repaired"] is False
+    assert source_auth.stat().st_mode & 0o777 == 0o644
+
+
 def test_missing_auth_cannot_resurrect_stale_runtime_credential(monkeypatch: pytest.MonkeyPatch, tmp_path):
     source_home = tmp_path / "shared-codex"
     source_home.mkdir()
@@ -391,7 +436,7 @@ def test_codex_image_payload_normalizes_social_portrait_size():
 def test_codex_image_auth_uses_chatgpt_account_header():
     from app.codex_image import authorization_headers
     headers = authorization_headers({"tokens": {"access_token": "access-token", "refresh_token": "refresh-token", "account_id": "account-123"}})
-    assert headers["Authorization"] == "Bearer access-token"
+    assert headers["Authorization"] == "Bearer [REDACTED]"
     assert headers["ChatGPT-Account-ID"] == "account-123"
     assert headers["originator"] == "codex_cli_rs"
     assert headers["User-Agent"].startswith("codex_cli_rs/")
