@@ -1052,16 +1052,18 @@ def create_app(
         await gateway.close()
 
     @app.get("/health")
-    async def health() -> dict[str, Any]:
+    async def health() -> Response:
         circuit = await gateway.circuit.snapshot()
         image_circuit = await gateway.image_circuit.snapshot()
-        return {
-            "status": "ok",
+        codex_upstream = await gateway.codex_health()
+        body = {
+            "status": "ok" if codex_upstream["ok"] else "degraded",
             "gateway_configured": bool(selected.allowed_api_key_sha256s),
             "windmill_caller_allowed": "f777774c7a4100fc25022f34d27483a9080679aed01a0fca54ced407ca09df9f" in selected.allowed_api_key_sha256s,
             "allowed_caller_count": len(selected.allowed_api_key_sha256s),
             "max_body_bytes": selected.max_body_bytes,
             "codex_configured": bool(selected.codex_api_key),
+            "codex_upstream": codex_upstream,
             "model_allowlist_enforced": bool(selected.allowed_models),
             "api_fallback": (
                 "caller_bearer_or_server"
@@ -1073,6 +1075,10 @@ def create_app(
             "image_circuit": image_circuit,
             "image_generation": "codex-primary-api-fallback",
         }
+        return JSONResponse(
+            status_code=200 if codex_upstream["ok"] else 503,
+            content=body,
+        )
 
     async def handle(
         request: Request, kind: EndpointKind
