@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from jsonschema import ValidationError, validate as validate_json_schema
 LOGGER = logging.getLogger(__name__)
 
@@ -340,6 +341,37 @@ class Gateway:
     async def close(self) -> None:
         await self.client.aclose()
 
+    async def codex_health(self) -> dict[str, Any]:
+        base_url = self.settings.codex_url
+        if base_url.endswith("/v1"):
+            base_url = base_url[:-3]
+        try:
+            response = await self.client.get(
+                f"{base_url}/healthz",
+                timeout=min(5.0, self.settings.timeout_seconds),
+            )
+        except httpx.HTTPError as exc:
+            return {
+                "ok": False,
+                "status_code": None,
+                "error": exc.__class__.__name__,
+            }
+
+        if response.status_code != 200:
+            return {"ok": False, "status_code": response.status_code}
+        try:
+            payload = response.json()
+        except ValueError:
+            return {
+                "ok": False,
+                "status_code": response.status_code,
+                "error": "invalid_json",
+            }
+        return {
+            "ok": isinstance(payload, dict) and payload.get("ok") is True,
+            "status_code": response.status_code,
+        }
+
     def normalize_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         model = payload.get("model")
         if not isinstance(model, str) or not model.strip():
@@ -380,7 +412,7 @@ class Gateway:
                 kind=kind,
                 payload=normalized,
                 request_id=request_id,
-                api_key=fallback_api_key,
+                api_key=***REDACTED***,
             )
 
         skip, skip_reason = await self.circuit.should_skip()
@@ -399,7 +431,7 @@ class Gateway:
                     kind=kind,
                     payload=normalized,
                     request_id=request_id,
-                    api_key=self.settings.codex_api_key,
+                    api_key=***REDACTED***,
                 )
                 if (
                     codex_result.response is not None
@@ -457,7 +489,7 @@ class Gateway:
                 kind=kind,
                 payload=normalized,
                 request_id=request_id,
-                api_key=fallback_api_key,
+                api_key=***REDACTED***,
             )
             if api_result.response is None:
                 return json_error(
@@ -481,12 +513,12 @@ class Gateway:
         kind: EndpointKind,
         payload: dict[str, Any],
         request_id: str,
-        api_key: str,
+        api_key: ***REDACTED***,
     ) -> Response:
         if not api_key:
-            return json_error(status_code=502, message="No OpenAI API credential was supplied.", code="api_key_missing", request_id=request_id, fallback_reason="api_only_model")
+            ***REDACTED*** json_error(status_code=502, message="No OpenAI API credential was supplied.", code="api_key_missing", request_id=request_id, fallback_reason="api_only_model")
         async with self.semaphore:
-            result = await self._call_provider(provider="openai", kind=kind, payload=payload, request_id=request_id, api_key=api_key)
+            result = await self._call_provider(provider="openai", kind=kind, payload=payload, request_id=request_id, api_key=***REDACTED***
         if result.response is None:
             return json_error(status_code=502, message="The OpenAI API provider was unavailable.", code="api_provider_unavailable", request_id=request_id, fallback_reason=result.error_reason or "api_only_model")
         return relay_response(result.response, provider="openai-api", fallback_used=False, fallback_reason=None, request_id=request_id)
@@ -496,7 +528,7 @@ class Gateway:
         *,
         payload: dict[str, Any],
         request_id: str,
-        api_key: str,
+        api_key: ***REDACTED***,
     ) -> Response:
         skip, skip_reason = await self.image_circuit.should_skip()
         fallback_reason: str | None = None
@@ -508,7 +540,7 @@ class Gateway:
                     codex_response = await self.client.post(
                         f"{self.settings.codex_url}/images/generations",
                         headers={
-                            "Authorization": f"Bearer {self.settings.codex_api_key}",
+                            "Authorization": f"Bearer [REDACTED]}",
                             "Content-Type": "application/json",
                             "Accept": "application/json",
                             "X-Request-ID": request_id,
@@ -575,7 +607,7 @@ class Gateway:
                 fallback_reason = "image_circuit_open:quota"
 
             if not api_key:
-                return json_error(
+                ***REDACTED*** json_error(
                     status_code=502,
                     message="Codex image generation was unavailable and no OpenAI API fallback credential was supplied.",
                     code="image_fallback_key_missing",
@@ -586,7 +618,7 @@ class Gateway:
                 api_response = await self.client.post(
                     f"{self.settings.openai_url}/images/generations",
                     headers={
-                        "Authorization": f"Bearer {api_key}",
+                        "Authorization": f"Bearer [REDACTED]}",
                         "Content-Type": "application/json",
                         "Accept": "application/json",
                         "X-Request-ID": request_id,
@@ -625,11 +657,11 @@ class Gateway:
         body: bytes,
         request_headers: dict[str, str],
         request_id: str,
-        api_key: str,
+        api_key: ***REDACTED***,
     ) -> Response:
         if not api_key:
-            return json_error(status_code=502, message="No OpenAI API credential was supplied.", code="api_key_missing", request_id=request_id, fallback_reason="api_passthrough")
-        headers = {"Authorization": f"Bearer {api_key}", "Accept": request_headers.get("accept", "application/json"), "X-Request-ID": request_id}
+            ***REDACTED*** json_error(status_code=502, message="No OpenAI API credential was supplied.", code="api_key_missing", request_id=request_id, fallback_reason="api_passthrough")
+        headers = {"Authorization": f"Bearer [REDACTED]}", "Accept": request_headers.get("accept", "application/json"), "X-Request-ID": request_id}
         for name in ("content-type", "openai-organization", "openai-project", "idempotency-key"):
             value = request_headers.get(name)
             if value:
@@ -650,10 +682,10 @@ class Gateway:
         kind: EndpointKind,
         payload: dict[str, Any],
         request_id: str,
-        api_key: str,
+        api_key: ***REDACTED***,
     ) -> ProviderResult:
         if not api_key:
-            return ProviderResult(
+            ***REDACTED*** ProviderResult(
                 None, "auth", f"{provider}_api_key_missing"
             )
 
@@ -667,7 +699,7 @@ class Gateway:
             response = await self.client.post(
                 f"{base}{path}",
                 headers={
-                    "Authorization": f"Bearer {api_key}",
+                    "Authorization": f"Bearer [REDACTED]}",
                     "Content-Type": "application/json",
                     "Accept": "application/json",
                     "X-Request-ID": request_id,
@@ -1020,16 +1052,18 @@ def create_app(
         await gateway.close()
 
     @app.get("/health")
-    async def health() -> dict[str, Any]:
+    async def health() -> Response:
         circuit = await gateway.circuit.snapshot()
         image_circuit = await gateway.image_circuit.snapshot()
-        return {
-            "status": "ok",
+        codex_upstream = await gateway.codex_health()
+        body = {
+            "status": "ok" if codex_upstream["ok"] else "degraded",
             "gateway_configured": bool(selected.allowed_api_key_sha256s),
             "windmill_caller_allowed": "f777774c7a4100fc25022f34d27483a9080679aed01a0fca54ced407ca09df9f" in selected.allowed_api_key_sha256s,
             "allowed_caller_count": len(selected.allowed_api_key_sha256s),
             "max_body_bytes": selected.max_body_bytes,
             "codex_configured": bool(selected.codex_api_key),
+            "codex_upstream": codex_upstream,
             "model_allowlist_enforced": bool(selected.allowed_models),
             "api_fallback": (
                 "caller_bearer_or_server"
@@ -1041,6 +1075,10 @@ def create_app(
             "image_circuit": image_circuit,
             "image_generation": "codex-primary-api-fallback",
         }
+        return JSONResponse(
+            status_code=200 if codex_upstream["ok"] else 503,
+            content=body,
+        )
 
     async def handle(
         request: Request, kind: EndpointKind
@@ -1078,7 +1116,7 @@ def create_app(
         return await gateway.generate_image(
             payload=payload,
             request_id=request_id,
-            api_key=selected.server_openai_api_key,
+            api_key=***REDACTED***,
         )
 
     @app.api_route("/v1/{path:path}", methods=["GET", "POST"])
@@ -1101,7 +1139,7 @@ def create_app(
             body=body,
             request_headers={key.lower(): value for key, value in request.headers.items()},
             request_id=request_id,
-            api_key=fallback_api_key(request, selected),
+            api_key=***REDACTED***, selected),
         )
 
     return app
