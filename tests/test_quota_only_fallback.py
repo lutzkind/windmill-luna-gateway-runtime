@@ -19,10 +19,10 @@ def settings(**overrides):
         codex_api_key="internal-codex-sidecar-v1",
         openai_url="https://api.test/v1",
         server_openai_api_key="server-openai-key",
-        allowed_models=frozenset({"gpt-5.6-luna", "luna-auto"}),
+        allowed_models=frozenset({"gpt-6-luna", "luna-auto"}),
         model_aliases={
-            "luna-auto": "gpt-5.6-luna",
-            "gpt-5.6-luna": "gpt-5.6-luna",
+            "luna-auto": "gpt-6-luna",
+            "gpt-6-luna": "gpt-6-luna",
         },
         timeout_seconds=10,
         max_body_bytes=1024 * 1024,
@@ -45,7 +45,7 @@ def client_for(handler, **overrides):
 
 
 def headers(force: str | None = None):
-    result = {"Authorization": f"Bearer {CALLER_KEY}"}
+    result = {"Authorization": f"Bearer [REDACTED]}"}
     if force:
         result["X-Luna-Gateway-Force-Fallback"] = force
     return result
@@ -95,12 +95,12 @@ def test_explicit_quota_uses_server_key_and_quota_circuit():
     assert seen == [
         (
             "https://codex.test/v1/chat/completions",
-            "Bearer internal-codex-sidecar-v1",
+            "Bearer [REDACTED]",
         ),
-        ("https://api.test/v1/chat/completions", "Bearer server-openai-key"),
-        ("https://api.test/v1/chat/completions", "Bearer server-openai-key"),
+        ("https://api.test/v1/chat/completions", "Bearer [REDACTED]"),
+        ("https://api.test/v1/chat/completions", "Bearer [REDACTED]"),
     ]
-    assert all(value != f"Bearer {CALLER_KEY}" for _, value in seen)
+    assert all(value != f"Bearer [REDACTED]}" for _, value in seen)
 
 
 def test_response_bearing_nonquota_failures_never_fallback():

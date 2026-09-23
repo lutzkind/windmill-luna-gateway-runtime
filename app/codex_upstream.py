@@ -23,7 +23,7 @@ from app.outbound_url import OutboundURLRejected, fetch_outbound
 
 app = FastAPI(title="Codex CLI OpenAI-compatible upstream", version="1.3.0")
 
-API_KEY = os.environ.get("OPENAI_VIA_CODEX_API_KEY", "").strip()
+API_KEY = ***REDACTED***"OPENAI_VIA_CODEX_API_KEY", "").strip()
 CODEX_BINARY = os.environ.get("CODEX_BINARY", "codex").strip() or "codex"
 CODEX_MODEL = os.environ.get("CODEX_MODEL", "").strip()
 SOURCE_CODEX_HOME = Path(os.environ.get("CODEX_HOME", "/root/.codex").strip() or "/root/.codex")
@@ -82,8 +82,8 @@ class CodexRun:
 
 def _authorize(authorization: str | None) -> None:
     if not API_KEY:
-        raise HTTPException(status_code=503, detail="upstream API key is not configured")
-    if authorization != f"Bearer {API_KEY}":
+        ***REDACTED*** HTTPException(status_code=503, detail="upstream API key is not configured")
+    if authorization != f"Bearer [REDACTED]}":
         raise HTTPException(status_code=401, detail="unauthorized")
 
 
@@ -745,13 +745,13 @@ async def image_generations(payload: dict[str, Any], authorization: str | None =
 @app.get("/v1/models")
 async def models(authorization: str | None = Header(default=None)) -> dict[str, Any]:
     _authorize(authorization)
-    return {"object": "list", "data": [{"id": "gpt-5.6-luna", "object": "model", "owned_by": "codex-proxy"}]}
+    return {"object": "list", "data": [{"id": "gpt-6-luna", "object": "model", "owned_by": "codex-proxy"}]}
 
 
 @app.post("/v1/chat/completions")
 async def chat_completions(payload: dict[str, Any], authorization: str | None = Header(default=None)) -> dict[str, Any]:
     _authorize(authorization)
-    requested_model = str(payload.get("model") or "gpt-5.6-luna")
+    requested_model = str(payload.get("model") or "gpt-6-luna")
     web_search = _web_search_requested(payload)
     prompt, image_inputs = _prompt_and_images_from_messages(
         payload.get("messages"), web_search=web_search
@@ -783,7 +783,7 @@ async def chat_completions(payload: dict[str, Any], authorization: str | None = 
 @app.post("/v1/responses")
 async def responses(payload: dict[str, Any], authorization: str | None = Header(default=None)) -> dict[str, Any]:
     _authorize(authorization)
-    requested_model = str(payload.get("model") or "gpt-5.6-luna")
+    requested_model = str(payload.get("model") or "gpt-6-luna")
     web_search = _web_search_requested(payload)
     prompt, image_inputs = _prompt_and_images_from_responses_input(
         payload.get("input"),

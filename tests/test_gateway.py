@@ -19,8 +19,8 @@ def settings(**overrides):
         codex_api_key="internal-codex-sidecar-v1",
         openai_url="https://api.test/v1",
         server_openai_api_key="",
-        allowed_models=frozenset({"gpt-5.6-luna", "luna-auto"}),
-        model_aliases={"luna-auto": "gpt-5.6-luna", "gpt-5.6-luna": "gpt-5.6-luna"},
+        allowed_models=frozenset({"gpt-6-luna", "luna-auto"}),
+        model_aliases={"luna-auto": "gpt-6-luna", "gpt-6-luna": "gpt-6-luna"},
         timeout_seconds=10,
         max_body_bytes=1024 * 1024,
         max_concurrency=2,
@@ -39,8 +39,8 @@ def client_for(handler, **overrides):
     return TestClient(create_app(settings(**overrides), transport=httpx.MockTransport(handler)))
 
 
-def headers(api_key=CALLER_KEY, force=None):
-    result = {"Authorization": f"Bearer {api_key}"}
+def headers(api_key=***REDACTED***, force=None):
+    result = {"Authorization": f"Bearer [REDACTED]}"}
     if force:
         result["X-Luna-Gateway-Force-Fallback"] = force
     return result
@@ -64,7 +64,7 @@ def test_codex_primary_uses_internal_sidecar_key():
     assert response.status_code == 200
     assert response.headers["x-luna-gateway-provider"] == "codex"
     assert response.headers["x-luna-gateway-fallback"] == "false"
-    assert seen == [("https://codex.test/v1/chat/completions", "Bearer internal-codex-sidecar-v1")]
+    assert seen == [("https://codex.test/v1/chat/completions", "Bearer [REDACTED]")]
 
 
 def test_missing_or_unknown_bearer_is_rejected():
@@ -88,7 +88,7 @@ def test_quota_failure_does_not_send_caller_key_to_direct_api():
     assert first.headers["x-luna-gateway-fallback-reason"] == "quota"
     assert second.status_code == 502
     assert second.headers["x-luna-gateway-fallback-reason"].startswith("circuit_open:quota")
-    assert seen == [("https://codex.test/v1/chat/completions", "Bearer internal-codex-sidecar-v1")]
+    assert seen == [("https://codex.test/v1/chat/completions", "Bearer [REDACTED]")]
 
 
 def test_forced_fallback_requires_test_controls():
@@ -155,7 +155,7 @@ def test_responses_endpoint_preserves_web_search_tool():
         response = client.post("/v1/responses", headers=headers(), json=request_payload)
     assert response.status_code == 200
     assert seen["url"] == "https://codex.test/v1/responses"
-    assert seen["payload"]["model"] == "gpt-5.6-luna"
+    assert seen["payload"]["model"] == "gpt-6-luna"
     assert seen["payload"]["tools"] == [{"type": "web_search"}]
 
 
@@ -166,7 +166,7 @@ def test_api_only_model_and_media_passthrough():
         if request.url.path.endswith("/audio/speech"):
             return httpx.Response(200, content=b"audio-bytes", headers={"content-type": "audio/mpeg"})
         return httpx.Response(200, json=success("api-only"))
-    with client_for(handler, allowed_models=frozenset({"gpt-5.6-luna", "luna-auto", "gpt-5-mini"})) as client:
+    with client_for(handler, allowed_models=frozenset({"gpt-6-luna", "luna-auto", "gpt-5-mini"})) as client:
         model_response = client.post("/v1/chat/completions", headers=headers(), json={"model": "gpt-5-mini", "messages": []})
         speech_response = client.post("/v1/audio/speech", headers={**headers(), "Content-Type": "application/json"}, content=b'{"model":"gpt-4o-mini-tts","input":"hi"}')
         blocked = client.post("/v1/files", headers=headers(), content=b"x")
@@ -178,7 +178,7 @@ def test_api_only_model_and_media_passthrough():
     assert speech_response.headers["content-type"].startswith("audio/mpeg")
     assert blocked.status_code == 404
     assert seen[0][0] == "https://api.test/v1/audio/speech"
-    assert all(item[1] == f"Bearer {CALLER_KEY}" for item in seen)
+    assert all(item[1] == f"Bearer [REDACTED]}" for item in seen)
 
 
 def test_internal_windmill_bearer_uses_server_key_for_api_only_media():
@@ -196,7 +196,7 @@ def test_internal_windmill_bearer_uses_server_key_for_api_only_media():
         )
 
     assert response.status_code == 200
-    assert seen == ["Bearer server-api-secret"]
+    assert seen == ["Bearer [REDACTED]"]
 
 
 def test_streaming_size_guards_and_health():
@@ -207,7 +207,7 @@ def test_streaming_size_guards_and_health():
     with client_for(handler, max_body_bytes=20) as client:
         assert client.post("/v1/chat/completions", headers=headers(), json=payload()).status_code == 413
     with client_for(handler, enable_test_controls=True) as client:
-        assert client.post("/v1/chat/completions", headers=headers(), json={"model": "gpt-5.6-luna", "messages": [], "stream": True}).status_code == 400
+        assert client.post("/v1/chat/completions", headers=headers(), json={"model": "gpt-6-luna", "messages": [], "stream": True}).status_code == 400
         health_response = client.get("/health")
         health = health_response.json()
     assert health_response.status_code == 200
@@ -457,12 +457,12 @@ def test_model_allowlist_accepts_alias_targets_and_canonical_names():
         seen.append(str(request.url))
         return httpx.Response(200, json=success())
 
-    with client_for(handler, allowed_models=frozenset({"gpt-5.6-luna"})) as client:
+    with client_for(handler, allowed_models=frozenset({"gpt-6-luna"})) as client:
         aliased = client.post("/v1/chat/completions", headers=headers(), json=payload())
         canonical = client.post(
             "/v1/chat/completions",
             headers=headers(),
-            json={"model": "gpt-5.6-luna", "messages": [{"role": "user", "content": "hi"}]},
+            json={"model": "gpt-6-luna", "messages": [{"role": "user", "content": "hi"}]},
         )
 
     assert aliased.status_code == 200
@@ -479,7 +479,7 @@ def test_model_allowlist_fails_closed_for_unlisted_alias_targets():
 
     with client_for(
         handler,
-        allowed_models=frozenset({"gpt-5.6-luna"}),
+        allowed_models=frozenset({"gpt-6-luna"}),
         model_aliases={"luna-auto": "gpt-4o"},
     ) as client:
         response = client.post("/v1/chat/completions", headers=headers(), json=payload())
@@ -517,7 +517,7 @@ def test_empty_model_allowlist_disables_enforcement():
 
 def test_model_allowlist_defaults_and_health_flag(monkeypatch):
     monkeypatch.delenv("ALLOWED_MODELS", raising=False)
-    assert Settings.from_env().allowed_models == frozenset({"gpt-5.6-luna", "luna-auto"})
+    assert Settings.from_env().allowed_models == frozenset({"gpt-6-luna", "luna-auto"})
     monkeypatch.setenv("ALLOWED_MODELS", "")
     assert Settings.from_env().allowed_models == frozenset()
 

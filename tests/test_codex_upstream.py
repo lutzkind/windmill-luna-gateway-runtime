@@ -16,11 +16,11 @@ from app.outbound_url import OutboundResponse, OutboundURLRejected
 def test_codex_command_forwards_model_and_reasoning_effort():
     command = codex_upstream._build_codex_command(
         output_path="/tmp/final.txt",
-        model="gpt-5.6-luna",
+        model="gpt-6-luna",
         reasoning_effort="low",
     )
 
-    assert command[command.index("--model") + 1] == "gpt-5.6-luna"
+    assert command[command.index("--model") + 1] == "gpt-6-luna"
     assert 'model_reasoning_effort="low"' in command
     assert "--sandbox" in command
     assert command[command.index("--sandbox") + 1] == "read-only"
@@ -32,7 +32,7 @@ def test_codex_command_forwards_model_and_reasoning_effort():
 def test_codex_command_forwards_image_paths():
     command = codex_upstream._build_codex_command(
         output_path="/tmp/final.txt",
-        model="gpt-5.6-luna",
+        model="gpt-6-luna",
         image_paths=[Path("/tmp/source.jpg"), Path("/tmp/card.png")],
     )
 
@@ -94,7 +94,7 @@ def test_image_input_limit_is_bounded():
 def test_web_search_command_enables_json_event_capture():
     command = codex_upstream._build_codex_command(
         output_path="/tmp/final.txt",
-        model="gpt-5.6-luna",
+        model="gpt-6-luna",
         json_events=True,
     )
 
@@ -436,7 +436,7 @@ def test_codex_image_payload_normalizes_social_portrait_size():
 def test_codex_image_auth_uses_chatgpt_account_header():
     from app.codex_image import authorization_headers
     headers = authorization_headers({"tokens": {"access_token": "access-token", "refresh_token": "refresh-token", "account_id": "account-123"}})
-    assert headers["Authorization"] == "Bearer access-token"
+    assert headers["Authorization"] == "Bearer [REDACTED]"
     assert headers["ChatGPT-Account-ID"] == "account-123"
     assert headers["originator"] == "codex_cli_rs"
     assert headers["User-Agent"].startswith("codex_cli_rs/")
