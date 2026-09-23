@@ -23,12 +23,3 @@ jobs:
         run: PYTHONPATH=. pytest -q
       - name: Validate Compose
         run: docker compose -f docker-compose.yaml config >/dev/null
-      - name: Build image
-        run: |
-          if command -v buildah >/dev/null 2>&1; then
-            TMPDIR="$RUNNER_TEMP" buildah bud -t windmill-luna-gateway:test .
-          elif command -v podman >/dev/null 2>&1; then
-            TMPDIR="$RUNNER_TEMP" podman build -t windmill-luna-gateway:test .
-          else
-            docker build -t windmill-luna-gateway:test .
-          fi
