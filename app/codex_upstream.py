@@ -261,6 +261,7 @@ def _shared_auth_status() -> dict[str, bool]:
         "regular_file": False,
         "owner": False,
         "permissions": False,
+        "permissions_repaired": False,
         "writable": False,
         "json_valid": False,
         "valid": False,
@@ -276,6 +277,18 @@ def _shared_auth_status() -> dict[str, bool]:
         status["file_present"] = True
         status["regular_file"] = stat.S_ISREG(metadata.st_mode)
         status["owner"] = metadata.st_uid == 0 and metadata.st_gid == 0
+        if (
+            status["canonical_path"]
+            and status["regular_file"]
+            and status["owner"]
+            and stat.S_IMODE(metadata.st_mode) != 0o600
+        ):
+            # Host Codex login/refresh may atomically replace auth.json with
+            # broader mode bits. Re-tighten only the already-canonical,
+            # root-owned regular file; ownership/path violations still fail closed.
+            os.chmod(source_auth, 0o600)
+            metadata = source_auth.stat()
+            status["permissions_repaired"] = True
         status["permissions"] = stat.S_IMODE(metadata.st_mode) == 0o600
         status["writable"] = os.access(source_auth, os.W_OK)
         value = json.loads(source_auth.read_text(encoding="utf-8"))
