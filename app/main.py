@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from jsonschema import ValidationError, validate as validate_json_schema
 LOGGER = logging.getLogger(__name__)
 
