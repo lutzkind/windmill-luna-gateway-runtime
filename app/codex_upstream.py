@@ -710,6 +710,7 @@ async def healthz() -> dict[str, Any]:
         "auth_source_canonical": auth["canonical_path"],
         "auth_source_owner": auth["owner"],
         "auth_source_permissions": auth["permissions"],
+        "auth_source_permissions_repaired": auth["permissions_repaired"],
         "auth_json_valid": auth["json_valid"],
         "runtime_home": str(RUNTIME_CODEX_HOME),
         "auth_persistence": "shared_codex_directory_rw",
