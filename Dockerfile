@@ -10,7 +10,7 @@ ENV PYTHONUNBUFFERED=1 \
 # Codex with a ChatGPT account". Model routing stays in this gateway; only the
 # CLI version is pinned here.
 ARG CODEX_CLI_VERSION=0.156.1
-RUN npm install -g "@openai/codex@${CODEX_CLI_VERSION}" \
+RUN node /usr/local/lib/node_modules/npm/bin/npm-cli.js install -g "@openai/codex@${CODEX_CLI_VERSION}" \
     && codex --version | grep -Fx "codex-cli ${CODEX_CLI_VERSION}"
 
 WORKDIR /app
