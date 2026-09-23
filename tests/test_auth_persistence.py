@@ -175,6 +175,25 @@ def test_legacy_owner_and_permissions_are_normalized_before_drop(tmp_path: Path)
     assert result.stdout.strip() == "0"
 
 
+def test_runtime_process_uses_private_umask_for_new_files(tmp_path: Path):
+    source_home = tmp_path / "shared-codex"
+    source_auth = source_home / "auth.json"
+    write_auth(source_auth, "old")
+    runtime_home = tmp_path / "runtime"
+    created = tmp_path / "created-by-runtime"
+
+    result = run_runtime(
+        source_home,
+        runtime_home,
+        "python3",
+        "-c",
+        f"from pathlib import Path; Path({str(created)!r}).write_text('x')",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert created.stat().st_mode & 0o777 == 0o600
+
+
 def test_missing_auth_fails_closed_without_stale_resurrection(tmp_path: Path):
     source_home = tmp_path / "shared-codex"
     source_home.mkdir()

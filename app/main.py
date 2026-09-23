@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from jsonschema import ValidationError, validate as validate_json_schema
 LOGGER = logging.getLogger(__name__)
 
@@ -339,6 +340,37 @@ class Gateway:
 
     async def close(self) -> None:
         await self.client.aclose()
+
+    async def codex_health(self) -> dict[str, Any]:
+        base_url = self.settings.codex_url
+        if base_url.endswith("/v1"):
+            base_url = base_url[:-3]
+        try:
+            response = await self.client.get(
+                f"{base_url}/healthz",
+                timeout=min(5.0, self.settings.timeout_seconds),
+            )
+        except httpx.HTTPError as exc:
+            return {
+                "ok": False,
+                "status_code": None,
+                "error": exc.__class__.__name__,
+            }
+
+        if response.status_code != 200:
+            return {"ok": False, "status_code": response.status_code}
+        try:
+            payload = response.json()
+        except ValueError:
+            return {
+                "ok": False,
+                "status_code": response.status_code,
+                "error": "invalid_json",
+            }
+        return {
+            "ok": isinstance(payload, dict) and payload.get("ok") is True,
+            "status_code": response.status_code,
+        }
 
     def normalize_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         model = payload.get("model")
@@ -1020,16 +1052,18 @@ def create_app(
         await gateway.close()
 
     @app.get("/health")
-    async def health() -> dict[str, Any]:
+    async def health() -> Response:
         circuit = await gateway.circuit.snapshot()
         image_circuit = await gateway.image_circuit.snapshot()
-        return {
-            "status": "ok",
+        codex_upstream = await gateway.codex_health()
+        body = {
+            "status": "ok" if codex_upstream["ok"] else "degraded",
             "gateway_configured": bool(selected.allowed_api_key_sha256s),
             "windmill_caller_allowed": "f777774c7a4100fc25022f34d27483a9080679aed01a0fca54ced407ca09df9f" in selected.allowed_api_key_sha256s,
             "allowed_caller_count": len(selected.allowed_api_key_sha256s),
             "max_body_bytes": selected.max_body_bytes,
             "codex_configured": bool(selected.codex_api_key),
+            "codex_upstream": codex_upstream,
             "model_allowlist_enforced": bool(selected.allowed_models),
             "api_fallback": (
                 "caller_bearer_or_server"
@@ -1041,6 +1075,10 @@ def create_app(
             "image_circuit": image_circuit,
             "image_generation": "codex-primary-api-fallback",
         }
+        return JSONResponse(
+            status_code=200 if codex_upstream["ok"] else 503,
+            content=body,
+        )
 
     async def handle(
         request: Request, kind: EndpointKind

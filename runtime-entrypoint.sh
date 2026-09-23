@@ -22,6 +22,7 @@ if [ "$(id -u)" -eq 0 ]; then
     chown 0:0 "$auth_source"
     chmod 0600 "$auth_source"
     test -r "$auth_source"
+    umask 077
     exec setpriv \
         --reuid=0 \
         --regid=0 \
