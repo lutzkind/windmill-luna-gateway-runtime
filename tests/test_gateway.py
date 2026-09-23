@@ -39,8 +39,8 @@ def client_for(handler, **overrides):
     return TestClient(create_app(settings(**overrides), transport=httpx.MockTransport(handler)))
 
 
-def headers(api_key=CALLER_KEY, force=None):
-    result = {"Authorization": f"Bearer {api_key}"}
+def headers(api_key=***REDACTED***, force=None):
+    result = {"Authorization": f"Bearer [REDACTED]}"}
     if force:
         result["X-Luna-Gateway-Force-Fallback"] = force
     return result
@@ -64,7 +64,7 @@ def test_codex_primary_uses_internal_sidecar_key():
     assert response.status_code == 200
     assert response.headers["x-luna-gateway-provider"] == "codex"
     assert response.headers["x-luna-gateway-fallback"] == "false"
-    assert seen == [("https://codex.test/v1/chat/completions", "Bearer internal-codex-sidecar-v1")]
+    assert seen == [("https://codex.test/v1/chat/completions", "Bearer [REDACTED]")]
 
 
 def test_missing_or_unknown_bearer_is_rejected():
@@ -88,7 +88,7 @@ def test_quota_failure_does_not_send_caller_key_to_direct_api():
     assert first.headers["x-luna-gateway-fallback-reason"] == "quota"
     assert second.status_code == 502
     assert second.headers["x-luna-gateway-fallback-reason"].startswith("circuit_open:quota")
-    assert seen == [("https://codex.test/v1/chat/completions", "Bearer internal-codex-sidecar-v1")]
+    assert seen == [("https://codex.test/v1/chat/completions", "Bearer [REDACTED]")]
 
 
 def test_forced_fallback_requires_test_controls():
@@ -178,7 +178,7 @@ def test_api_only_model_and_media_passthrough():
     assert speech_response.headers["content-type"].startswith("audio/mpeg")
     assert blocked.status_code == 404
     assert seen[0][0] == "https://api.test/v1/audio/speech"
-    assert all(item[1] == f"Bearer {CALLER_KEY}" for item in seen)
+    assert all(item[1] == f"Bearer [REDACTED]}" for item in seen)
 
 
 def test_internal_windmill_bearer_uses_server_key_for_api_only_media():
@@ -196,22 +196,42 @@ def test_internal_windmill_bearer_uses_server_key_for_api_only_media():
         )
 
     assert response.status_code == 200
-    assert seen == ["Bearer server-api-secret"]
+    assert seen == ["Bearer [REDACTED]"]
 
 
 def test_streaming_size_guards_and_health():
     def handler(request):
+        if request.url.path == "/healthz":
+            return httpx.Response(200, json={"ok": True})
         raise AssertionError("provider called")
     with client_for(handler, max_body_bytes=20) as client:
         assert client.post("/v1/chat/completions", headers=headers(), json=payload()).status_code == 413
     with client_for(handler, enable_test_controls=True) as client:
         assert client.post("/v1/chat/completions", headers=headers(), json={"model": "gpt-5.6-luna", "messages": [], "stream": True}).status_code == 400
-        health = client.get("/health").json()
+        health_response = client.get("/health")
+        health = health_response.json()
+    assert health_response.status_code == 200
     assert health["gateway_configured"] is True
     assert health["codex_configured"] is True
+    assert health["codex_upstream"] == {"ok": True, "status_code": 200}
     assert health["api_fallback"] == "caller_bearer"
     assert health["test_controls"] is True
-    assert health["test_controls"] is True
+
+
+def test_health_fails_when_codex_upstream_is_unhealthy():
+    def handler(request):
+        if request.url.path == "/healthz":
+            return httpx.Response(503, json={"ok": False})
+        raise AssertionError("provider called")
+
+    with client_for(handler) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "degraded"
+    assert body["codex_upstream"] == {"ok": False, "status_code": 503}
+
 
 
 def test_default_model_body_limit_supports_multimodal_requests(monkeypatch):
