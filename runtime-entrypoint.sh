@@ -16,12 +16,12 @@ if [ "$(id -u)" -eq 0 ]; then
         exit 78
     fi
     # Host `codex login` and token refreshes replace auth.json atomically.
-    # Normalize legacy ownership once, then keep the sidecar root-owned with
-    # no Linux capabilities so every newly replaced canonical inode remains
-    # readable and writable without a private credential copy.
+    # Normalize startup metadata and force private permissions on any file that
+    # Codex creates after startup so auth rotation cannot make the sidecar unhealthy.
     chown 0:0 "$auth_source"
     chmod 0600 "$auth_source"
     test -r "$auth_source"
+    umask 077
     exec setpriv \
         --reuid=0 \
         --regid=0 \
