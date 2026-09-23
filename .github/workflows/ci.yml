@@ -24,6 +24,7 @@ jobs:
       - name: Validate Compose
         run: docker compose -f docker-compose.yaml config >/dev/null
       - name: Build image
-        env:
-          TMPDIR: /tmp
-        run: docker build -t windmill-luna-gateway:test .
+        run: |
+          mkdir -p /var/tmp
+          chmod 1777 /var/tmp
+          docker build -t windmill-luna-gateway:test .
