@@ -6,6 +6,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from collections import deque
@@ -55,6 +56,12 @@ MEDIUM_REASONING_MARKERS = (
     "transcription summary",
     "content engine",
 )
+SMOKE_MARKER = "LUNA_SMOKE_OK"
+SMOKE_PROMPT = (
+    "Reply with exactly this token and nothing else: LUNA_SMOKE_OK"
+)
+CANDIDATE_MODEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
+CANDIDATE_MAX_EFFORTS = 8
 
 
 
@@ -76,12 +83,18 @@ class Settings:
     quota_open_seconds: int
     auth_open_seconds: int
     enable_test_controls: bool
+    enable_model_validation: bool = False
+
+    @property
+    def luna_auto_model(self) -> str | None:
+        """Concrete model the caller-facing `luna-auto` alias resolves to."""
+        return self.model_aliases.get("luna-auto")
 
     @classmethod
     def from_env(cls) -> "Settings":
         aliases_raw = os.getenv(
             "MODEL_ALIASES_JSON",
-            '{"luna-auto":"gpt-6-luna","gpt-6-luna":"gpt-6-luna"}',
+            '{"luna-auto":"gpt-6-luna"}',
         )
         aliases = json.loads(aliases_raw)
         if not isinstance(aliases, dict) or not all(
@@ -95,7 +108,7 @@ class Settings:
         allowed = frozenset(
             part.strip()
             for part in os.getenv(
-                "ALLOWED_MODELS", "gpt-6-luna,luna-auto"
+                "ALLOWED_MODELS", "luna-auto,gpt-6-luna"
             ).split(",")
             if part.strip()
         )
@@ -149,6 +162,10 @@ class Settings:
             ),
             enable_test_controls=os.getenv(
                 "ENABLE_TEST_CONTROLS", "false"
+            ).strip().lower()
+            in {"1", "true", "yes", "on"},
+            enable_model_validation=os.getenv(
+                "ENABLE_MODEL_VALIDATION", "false"
             ).strip().lower()
             in {"1", "true", "yes", "on"},
         )
@@ -522,6 +539,112 @@ class Gateway:
         if result.response is None:
             return json_error(status_code=502, message="The OpenAI API provider was unavailable.", code="api_provider_unavailable", request_id=request_id, fallback_reason=result.error_reason or "api_only_model")
         return relay_response(result.response, provider="openai-api", fallback_used=False, fallback_reason=None, request_id=request_id)
+
+    async def _candidate_completion(
+        self,
+        *,
+        model: str,
+        reasoning_effort: str | None,
+        request_id: str,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": [{"role": "user", "content": SMOKE_PROMPT}],
+            "max_completion_tokens": 64,
+        }
+        if reasoning_effort:
+            payload["reasoning_effort"] = reasoning_effort
+        result = await self._call_provider(
+            provider="codex",
+            kind="chat",
+            payload=payload,
+            request_id=request_id,
+            api_key=self.settings.codex_api_key,
+        )
+        if result.response is None:
+            return {
+                "ok": False,
+                "status_code": None,
+                "error": result.error_reason or "unavailable",
+                "content": "",
+            }
+        status = result.response.status_code
+        content = ""
+        try:
+            body = result.response.json()
+        except ValueError:
+            body = None
+        if isinstance(body, dict):
+            choices = body.get("choices")
+            if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                message = choices[0].get("message")
+                if isinstance(message, dict) and isinstance(message.get("content"), str):
+                    content = message["content"]
+        return {
+            "ok": 200 <= status < 300 and bool(content.strip()),
+            "status_code": status,
+            "error": None if 200 <= status < 300 else f"http_{status}",
+            "content": content,
+        }
+
+    async def validate_candidate_model(
+        self,
+        *,
+        model: str,
+        reasoning_efforts: list[str],
+        smoke: bool,
+        request_id: str,
+    ) -> dict[str, Any]:
+        """Validate a candidate model without touching the active routing map."""
+        checks: dict[str, Any] = {}
+        errors: list[str] = []
+        upstream_health = await self.codex_health()
+        checks["upstream_health"] = {
+            "ok": bool(upstream_health.get("ok")),
+            "status_code": upstream_health.get("status_code"),
+        }
+        if not upstream_health.get("ok"):
+            errors.append("codex_upstream_unhealthy")
+
+        effort_results: dict[str, Any] = {}
+        for effort in reasoning_efforts:
+            entry = await self._candidate_completion(
+                model=model,
+                reasoning_effort=None if effort == "default" else effort,
+                request_id=f"{request_id}-{effort}",
+            )
+            effort_results[effort] = {
+                "ok": entry["ok"],
+                "status_code": entry["status_code"],
+                "error": entry["error"],
+            }
+            if not entry["ok"]:
+                errors.append(f"reasoning_effort_failed:{effort}")
+        checks["reasoning_efforts"] = effort_results
+
+        if smoke:
+            smoke_entry = await self._candidate_completion(
+                model=model,
+                reasoning_effort=None,
+                request_id=f"{request_id}-smoke",
+            )
+            content = smoke_entry["content"].strip().upper()
+            smoke_ok = smoke_entry["ok"] and SMOKE_MARKER in content
+            checks["smoke"] = {
+                "ok": smoke_ok,
+                "status_code": smoke_entry["status_code"],
+                "marker": SMOKE_MARKER,
+                "observed": smoke_entry["content"].strip()[:120],
+            }
+            if not smoke_ok:
+                errors.append("smoke_test_failed")
+
+        return {
+            "ok": not errors,
+            "model": model,
+            "checks": checks,
+            "errors": errors,
+        }
 
     async def generate_image(
         self,
@@ -1065,6 +1188,10 @@ def create_app(
             "codex_configured": bool(selected.codex_api_key),
             "codex_upstream": codex_upstream,
             "model_allowlist_enforced": bool(selected.allowed_models),
+            "luna_auto_model": selected.luna_auto_model,
+            "model_aliases": dict(sorted(selected.model_aliases.items())),
+            "reasoning_efforts": sorted(REASONING_EFFORTS),
+            "model_validation_enabled": selected.enable_model_validation,
             "api_fallback": (
                 "caller_bearer_or_server"
                 if selected.server_openai_api_key
@@ -1118,6 +1245,40 @@ def create_app(
             request_id=request_id,
             api_key=selected.server_openai_api_key,
         )
+
+    @app.post("/admin/validate-model")
+    @app.post("/v1/admin/validate-model", include_in_schema=False)
+    async def validate_model(request: Request) -> Response:
+        if not selected.enable_model_validation:
+            raise HTTPException(status_code=404, detail="endpoint_not_allowed")
+        require_gateway_auth(request, selected)
+        payload = await read_json_body(request, selected.max_body_bytes)
+        model = payload.get("model")
+        if not isinstance(model, str) or not CANDIDATE_MODEL_PATTERN.fullmatch(model.strip()):
+            raise HTTPException(status_code=400, detail="invalid_candidate_model")
+        raw_efforts = payload.get("reasoning_efforts")
+        if raw_efforts is None:
+            raw_efforts = []
+        if not isinstance(raw_efforts, list) or len(raw_efforts) > CANDIDATE_MAX_EFFORTS:
+            raise HTTPException(status_code=400, detail="invalid_reasoning_efforts")
+        efforts: list[str] = []
+        for effort in raw_efforts:
+            normalized = str(effort or "").strip().lower()
+            if normalized != "default" and normalized not in REASONING_EFFORTS:
+                raise HTTPException(status_code=400, detail="invalid_reasoning_efforts")
+            if normalized not in efforts:
+                efforts.append(normalized)
+        smoke = payload.get("smoke", True)
+        if not isinstance(smoke, bool):
+            raise HTTPException(status_code=400, detail="invalid_smoke_flag")
+        request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+        result = await gateway.validate_candidate_model(
+            model=model.strip(),
+            reasoning_efforts=efforts,
+            smoke=smoke,
+            request_id=request_id,
+        )
+        return JSONResponse(content=result)
 
     @app.api_route("/v1/{path:path}", methods=["GET", "POST"])
     @app.api_route("/{path:path}", methods=["GET", "POST"], include_in_schema=False)

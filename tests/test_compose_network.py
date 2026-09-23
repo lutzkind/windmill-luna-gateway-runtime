@@ -48,7 +48,7 @@ def test_codex_auth_refreshes_persist_without_coolify_file_snapshots():
     assert "/root/.codex/auth.json:/run/secrets/codex-auth.json:rw" not in text
     assert "/root/.codex-gateway/auth.json" not in text
     assert 'chown "$runtime_uid:$runtime_gid" "$auth_source"' not in entrypoint
-    assert 'chown 0:0 "$auth_source"' in entrypoint
+    assert 'chown "0:$runtime_gid" "$auth_source"' in entrypoint
     assert 'ln -s "$auth_source" "$auth_target"' not in entrypoint
     assert 'cp "$auth_source" "$auth_target"' not in entrypoint
     assert '"$auth_source" != "$auth_target"' in entrypoint
@@ -60,7 +60,7 @@ def test_codex_auth_survives_future_host_login_atomic_replacement():
     # Interactive host Codex login atomically replaces auth.json as root-owned.
     # The long-running upstream must therefore retain uid 0 rather than depend
     # on a one-time unprivileged chown that becomes stale after replacement.
-    assert 'chown 0:0 "$auth_source"' in entrypoint
+    assert 'chown "0:$runtime_gid" "$auth_source"' in entrypoint
     assert "--reuid=0" in entrypoint
     assert "--regid=0" in entrypoint
     assert 'chown "$runtime_uid:$runtime_gid" "$auth_source"' not in entrypoint
@@ -70,6 +70,11 @@ def test_codex_auth_survives_future_host_login_atomic_replacement():
     assert "--inh-caps=-all" in entrypoint
     assert "--ambient-caps=-all" in entrypoint
     assert "--nnp" in entrypoint
+    # A root supervisor re-normalizes the canonical file after any writer
+    # (host login, executor child, Etsy renderer sync) replaces ownership or
+    # mode, so every consumer of the shared credential keeps access.
+    assert "supervise_auth_file" in entrypoint
+    assert "shared_auth_mode=660" in entrypoint
 
 
 def test_only_the_canonical_codex_directory_can_be_the_auth_source():

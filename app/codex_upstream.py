@@ -32,6 +32,8 @@ CODEX_AUTH_SOURCE = Path(
     or str(SOURCE_CODEX_HOME / "auth.json")
 )
 RUNTIME_CODEX_HOME = Path(os.environ.get("LUNA_CODEX_HOME", "/tmp/luna-codex-home").strip() or "/tmp/luna-codex-home")
+SHARED_RUNTIME_GID = max(1, int(os.environ.get("LUNA_SHARED_RUNTIME_GID", "10001")))
+SHARED_AUTH_MODE = 0o660
 TIMEOUT_SECONDS = max(30, int(os.environ.get("CODEX_TIMEOUT_SECONDS", "180")))
 MAX_CONCURRENCY = max(1, int(os.environ.get("CODEX_MAX_CONCURRENCY", "4")))
 SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENCY)
@@ -253,13 +255,22 @@ def _responses_schema(payload: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _shared_auth_status() -> dict[str, bool]:
-    """Return non-secret health facts for the canonical shared auth file."""
+    """Return non-secret health facts for the canonical shared auth file.
+
+    The canonical contract is a root-owned regular file inside the shared
+    Codex directory with the shared runtime group and mode ``0660``. Multiple
+    consumers (host Codex login, the Codex executor child, the Etsy renderer
+    auth sync, and this sidecar) read or refresh the same file, so the
+    entrypoint supervisor re-normalizes ownership and mode whenever another
+    writer replaces it.
+    """
     source_auth = CODEX_AUTH_SOURCE
     status = {
         "file_present": False,
         "canonical_path": False,
         "regular_file": False,
         "owner": False,
+        "group": False,
         "permissions": False,
         "permissions_repaired": False,
         "writable": False,
@@ -276,20 +287,23 @@ def _shared_auth_status() -> dict[str, bool]:
         metadata = source_auth.stat()
         status["file_present"] = True
         status["regular_file"] = stat.S_ISREG(metadata.st_mode)
-        status["owner"] = metadata.st_uid == 0 and metadata.st_gid == 0
+        status["owner"] = metadata.st_uid == 0
+        status["group"] = metadata.st_gid == SHARED_RUNTIME_GID
         if (
             status["canonical_path"]
             and status["regular_file"]
             and status["owner"]
-            and stat.S_IMODE(metadata.st_mode) != 0o600
+            and status["group"]
+            and stat.S_IMODE(metadata.st_mode) != SHARED_AUTH_MODE
         ):
             # Host Codex login/refresh may atomically replace auth.json with
             # broader mode bits. Re-tighten only the already-canonical,
-            # root-owned regular file; ownership/path violations still fail closed.
-            os.chmod(source_auth, 0o600)
+            # root-owned regular file; ownership/path violations still fail
+            # closed and are repaired by the root entrypoint supervisor.
+            os.chmod(source_auth, SHARED_AUTH_MODE)
             metadata = source_auth.stat()
             status["permissions_repaired"] = True
-        status["permissions"] = stat.S_IMODE(metadata.st_mode) == 0o600
+        status["permissions"] = stat.S_IMODE(metadata.st_mode) == SHARED_AUTH_MODE
         status["writable"] = os.access(source_auth, os.W_OK)
         value = json.loads(source_auth.read_text(encoding="utf-8"))
         tokens = value.get("tokens") if isinstance(value, dict) else None
@@ -308,6 +322,7 @@ def _shared_auth_status() -> dict[str, bool]:
             "canonical_path",
             "regular_file",
             "owner",
+            "group",
             "permissions",
             "writable",
             "json_valid",
@@ -709,9 +724,11 @@ async def healthz() -> dict[str, Any]:
         "auth_source_writable": auth["writable"],
         "auth_source_canonical": auth["canonical_path"],
         "auth_source_owner": auth["owner"],
+        "auth_source_group": auth["group"],
         "auth_source_permissions": auth["permissions"],
         "auth_source_permissions_repaired": auth["permissions_repaired"],
         "auth_json_valid": auth["json_valid"],
+        "shared_runtime_gid": SHARED_RUNTIME_GID,
         "runtime_home": str(RUNTIME_CODEX_HOME),
         "auth_persistence": "shared_codex_directory_rw",
     }

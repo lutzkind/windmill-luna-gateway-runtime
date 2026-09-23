@@ -4,6 +4,15 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
+# Pin the Codex CLI to a release whose bundled model metadata and ChatGPT
+# account support include the current Luna generation. The base image ships an
+# older CLI that rejects GPT-6 Luna with "model is not supported when using
+# Codex with a ChatGPT account". Model routing stays in this gateway; only the
+# CLI version is pinned here.
+ARG CODEX_CLI_VERSION=0.156.1
+RUN npm install -g "@openai/codex@${CODEX_CLI_VERSION}" \
+    && codex --version | grep -Fx "codex-cli ${CODEX_CLI_VERSION}"
+
 WORKDIR /app
 COPY requirements.txt .
 RUN python -m pip install --no-cache-dir -r requirements.txt
