@@ -149,9 +149,21 @@ def test_web_search_event_parser_and_source_extraction():
     }]
 
 
-def test_none_reasoning_maps_to_codex_minimal():
-    assert codex_upstream._codex_reasoning_effort("none") == "minimal"
+def test_none_reasoning_is_forwarded_as_none():
+    assert codex_upstream._codex_reasoning_effort("none") == "none"
     assert codex_upstream._codex_reasoning_effort("low") == "low"
+    assert codex_upstream._codex_reasoning_effort("xhigh") == "xhigh"
+    assert codex_upstream._codex_reasoning_effort("max") == "max"
+
+
+def test_legacy_minimal_alias_maps_to_none():
+    assert codex_upstream._codex_reasoning_effort("minimal") == "none"
+    assert codex_upstream._codex_reasoning_effort("MINIMAL") == "none"
+
+
+def test_unknown_reasoning_levels_are_rejected():
+    with pytest.raises(HTTPException, match="invalid_reasoning_effort"):
+        codex_upstream._codex_reasoning_effort("extreme")
 
 
 def _write_valid_auth(path: Path, access: str = "access", refresh: str = "refresh") -> None:
