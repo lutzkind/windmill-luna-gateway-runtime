@@ -492,6 +492,8 @@ def test_empty_model_allowlist_disables_enforcement():
     seen = []
 
     def handler(request):
+        if request.url.host == "codex.test" and request.url.path == "/healthz":
+            return httpx.Response(200, json={"ok": True})
         seen.append(str(request.url))
         return httpx.Response(200, json=success("api-only"))
 
