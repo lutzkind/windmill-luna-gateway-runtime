@@ -341,6 +341,37 @@ class Gateway:
     async def close(self) -> None:
         await self.client.aclose()
 
+    async def codex_health(self) -> dict[str, Any]:
+        base_url = self.settings.codex_url
+        if base_url.endswith("/v1"):
+            base_url = base_url[:-3]
+        try:
+            response = await self.client.get(
+                f"{base_url}/healthz",
+                timeout=min(5.0, self.settings.timeout_seconds),
+            )
+        except httpx.HTTPError as exc:
+            return {
+                "ok": False,
+                "status_code": None,
+                "error": exc.__class__.__name__,
+            }
+
+        if response.status_code != 200:
+            return {"ok": False, "status_code": response.status_code}
+        try:
+            payload = response.json()
+        except ValueError:
+            return {
+                "ok": False,
+                "status_code": response.status_code,
+                "error": "invalid_json",
+            }
+        return {
+            "ok": isinstance(payload, dict) and payload.get("ok") is True,
+            "status_code": response.status_code,
+        }
+
     def normalize_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         model = payload.get("model")
         if not isinstance(model, str) or not model.strip():
