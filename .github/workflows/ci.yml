@@ -24,4 +24,9 @@ jobs:
       - name: Validate Compose
         run: docker compose -f docker-compose.yaml config >/dev/null
       - name: Build image
-        run: docker --tmpdir "$RUNNER_TEMP" build -t windmill-luna-gateway:test .
+        run: |
+          if command -v podman >/dev/null 2>&1; then
+            podman --tmpdir "$RUNNER_TEMP" build -t windmill-luna-gateway:test .
+          else
+            docker build -t windmill-luna-gateway:test .
+          fi
