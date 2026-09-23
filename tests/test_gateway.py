@@ -405,6 +405,8 @@ def test_image_quota_falls_back_without_opening_text_circuit():
     seen = []
     def handler(request):
         seen.append(str(request.url))
+        if request.url.host == "codex.test" and request.url.path == "/healthz":
+            return httpx.Response(200, json={"ok": True})
         if request.url.host == "codex.test" and request.url.path.endswith("/images/generations"):
             return httpx.Response(429, json={"error": {"message": "image_gen usage limit reached", "limit_id": "image_gen"}})
         if request.url.host == "api.test" and request.url.path.endswith("/images/generations"):
