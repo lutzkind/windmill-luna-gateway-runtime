@@ -23,7 +23,7 @@ from app.outbound_url import OutboundURLRejected, fetch_outbound
 
 app = FastAPI(title="Codex CLI OpenAI-compatible upstream", version="1.3.0")
 
-API_KEY = os.environ.get("OPENAI_VIA_CODEX_API_KEY", "").strip()
+API_KEY = ***REDACTED***"OPENAI_VIA_CODEX_API_KEY", "").strip()
 CODEX_BINARY = os.environ.get("CODEX_BINARY", "codex").strip() or "codex"
 CODEX_MODEL = os.environ.get("CODEX_MODEL", "").strip()
 SOURCE_CODEX_HOME = Path(os.environ.get("CODEX_HOME", "/root/.codex").strip() or "/root/.codex")
@@ -82,8 +82,8 @@ class CodexRun:
 
 def _authorize(authorization: str | None) -> None:
     if not API_KEY:
-        raise HTTPException(status_code=503, detail="upstream API key is not configured")
-    if authorization != f"Bearer {API_KEY}":
+        ***REDACTED*** HTTPException(status_code=503, detail="upstream API key is not configured")
+    if authorization != f"Bearer [REDACTED]}":
         raise HTTPException(status_code=401, detail="unauthorized")
 
 
@@ -261,6 +261,7 @@ def _shared_auth_status() -> dict[str, bool]:
         "regular_file": False,
         "owner": False,
         "permissions": False,
+        "permissions_repaired": False,
         "writable": False,
         "json_valid": False,
         "valid": False,
@@ -276,6 +277,18 @@ def _shared_auth_status() -> dict[str, bool]:
         status["file_present"] = True
         status["regular_file"] = stat.S_ISREG(metadata.st_mode)
         status["owner"] = metadata.st_uid == 0 and metadata.st_gid == 0
+        if (
+            status["canonical_path"]
+            and status["regular_file"]
+            and status["owner"]
+            and stat.S_IMODE(metadata.st_mode) != 0o600
+        ):
+            # Host Codex login/refresh may atomically replace auth.json with
+            # broader mode bits. Re-tighten only the already-canonical,
+            # root-owned regular file; ownership/path violations still fail closed.
+            os.chmod(source_auth, 0o600)
+            metadata = source_auth.stat()
+            status["permissions_repaired"] = True
         status["permissions"] = stat.S_IMODE(metadata.st_mode) == 0o600
         status["writable"] = os.access(source_auth, os.W_OK)
         value = json.loads(source_auth.read_text(encoding="utf-8"))
@@ -697,6 +710,7 @@ async def healthz() -> dict[str, Any]:
         "auth_source_canonical": auth["canonical_path"],
         "auth_source_owner": auth["owner"],
         "auth_source_permissions": auth["permissions"],
+        "auth_source_permissions_repaired": auth["permissions_repaired"],
         "auth_json_valid": auth["json_valid"],
         "runtime_home": str(RUNTIME_CODEX_HOME),
         "auth_persistence": "shared_codex_directory_rw",
