@@ -27,7 +27,15 @@ same host-backed path rather than restoring a stored credential snapshot.
 
 The `/healthz` response reports only non-secret auth presence, ownership,
 permissions, canonical-path, writability, and JSON-validity facts. It never
-prints token contents.
+prints token contents. If a root-owned canonical `auth.json` is atomically
+replaced with broader mode bits, the sidecar tightens it back to `0600` during
+health/request validation without accepting unsafe ownership or non-canonical
+paths.
+
+The outer gateway `/health` endpoint is a readiness check: it verifies the
+Codex sidecar's `/healthz` and returns HTTP 503 when the primary upstream is
+not healthy. This prevents a healthy gateway process from masking an unusable
+Luna proxy path.
 
 ## Model policy
 
