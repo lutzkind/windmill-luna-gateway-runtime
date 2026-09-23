@@ -201,17 +201,37 @@ def test_internal_windmill_bearer_uses_server_key_for_api_only_media():
 
 def test_streaming_size_guards_and_health():
     def handler(request):
+        if request.url.path == "/healthz":
+            return httpx.Response(200, json={"ok": True})
         raise AssertionError("provider called")
     with client_for(handler, max_body_bytes=20) as client:
         assert client.post("/v1/chat/completions", headers=headers(), json=payload()).status_code == 413
     with client_for(handler, enable_test_controls=True) as client:
         assert client.post("/v1/chat/completions", headers=headers(), json={"model": "gpt-5.6-luna", "messages": [], "stream": True}).status_code == 400
-        health = client.get("/health").json()
+        health_response = client.get("/health")
+        health = health_response.json()
+    assert health_response.status_code == 200
     assert health["gateway_configured"] is True
     assert health["codex_configured"] is True
+    assert health["codex_upstream"] == {"ok": True, "status_code": 200}
     assert health["api_fallback"] == "caller_bearer"
     assert health["test_controls"] is True
-    assert health["test_controls"] is True
+
+
+def test_health_fails_when_codex_upstream_is_unhealthy():
+    def handler(request):
+        if request.url.path == "/healthz":
+            return httpx.Response(503, json={"ok": False})
+        raise AssertionError("provider called")
+
+    with client_for(handler) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "degraded"
+    assert body["codex_upstream"] == {"ok": False, "status_code": 503}
+
 
 
 def test_default_model_body_limit_supports_multimodal_requests(monkeypatch):
