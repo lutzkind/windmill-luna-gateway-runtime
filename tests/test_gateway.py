@@ -711,3 +711,40 @@ def test_validate_model_rejects_invalid_candidates():
         )
     assert bad_model.status_code == 400
     assert bad_effort.status_code == 400
+
+
+def test_validate_model_accepts_codex_cli_reasoning_levels():
+    seen = []
+
+    def handler(request):
+        if request.url.host == "codex.test" and request.url.path == "/healthz":
+            return httpx.Response(200, json={"ok": True})
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json=success("LUNA_SMOKE_OK"))
+
+    with client_for(handler, enable_model_validation=True) as client:
+        response = client.post(
+            "/admin/validate-model",
+            headers=headers(),
+            json={"model": "gpt-7-luna", "reasoning_efforts": ["default", "xhigh", "max"], "smoke": False},
+        )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["ok"] is True
+    assert [entry.get("reasoning_effort") for entry in seen] == [None, "xhigh", "max"]
+
+
+def test_validate_model_still_rejects_unknown_reasoning_levels():
+    def handler(request):
+        if request.url.host == "codex.test" and request.url.path == "/healthz":
+            return httpx.Response(200, json={"ok": True})
+        raise AssertionError("provider called")
+
+    with client_for(handler, enable_model_validation=True) as client:
+        response = client.post(
+            "/admin/validate-model",
+            headers=headers(),
+            json={"model": "gpt-7-luna", "reasoning_efforts": ["extreme"]},
+        )
+    assert response.status_code == 400

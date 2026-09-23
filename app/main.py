@@ -62,6 +62,10 @@ SMOKE_PROMPT = (
 )
 CANDIDATE_MODEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 CANDIDATE_MAX_EFFORTS = 8
+# Levels the candidate validator may exercise: the gateway's own chat levels
+# plus the Codex CLI levels currently used by the executor and redesign
+# runner. Validation passes them through unchanged; it never normalizes.
+CANDIDATE_REASONING_EFFORTS = REASONING_EFFORTS | {"default", "xhigh", "max"}
 
 
 
@@ -1264,7 +1268,7 @@ def create_app(
         efforts: list[str] = []
         for effort in raw_efforts:
             normalized = str(effort or "").strip().lower()
-            if normalized != "default" and normalized not in REASONING_EFFORTS:
+            if normalized not in CANDIDATE_REASONING_EFFORTS:
                 raise HTTPException(status_code=400, detail="invalid_reasoning_efforts")
             if normalized not in efforts:
                 efforts.append(normalized)
