@@ -26,7 +26,7 @@ jobs:
       - name: Build image
         run: |
           if command -v podman >/dev/null 2>&1; then
-            podman --tmpdir "$RUNNER_TEMP" build -t windmill-luna-gateway:test .
+            TMPDIR="$RUNNER_TEMP" podman --tmpdir "$RUNNER_TEMP" build -t windmill-luna-gateway:test .
           else
             docker build -t windmill-luna-gateway:test .
           fi
