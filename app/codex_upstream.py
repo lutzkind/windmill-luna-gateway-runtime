@@ -38,7 +38,7 @@ TIMEOUT_SECONDS = max(30, int(os.environ.get("CODEX_TIMEOUT_SECONDS", "180")))
 MAX_CONCURRENCY = max(1, int(os.environ.get("CODEX_MAX_CONCURRENCY", "4")))
 SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENCY)
 AUTH_SYNC_LOCK = asyncio.Lock()
-CODEX_REASONING_EFFORTS = frozenset({"minimal", "low", "medium", "high", "xhigh", "max"})
+CODEX_REASONING_EFFORTS = frozenset({"none", "low", "medium", "high", "xhigh", "max"})
 WEB_SEARCH_TOOL_TYPES = frozenset({"web_search"})
 MAX_IMAGE_INPUTS = max(1, min(8, int(os.environ.get("CODEX_MAX_IMAGE_INPUTS", "8"))))
 MAX_IMAGE_BYTES = max(1_048_576, min(20 * 1024 * 1024, int(os.environ.get("CODEX_MAX_IMAGE_BYTES", str(15 * 1024 * 1024)))))
@@ -350,8 +350,11 @@ def _codex_reasoning_effort(value: Any) -> str | None:
     if value is None or not str(value).strip():
         return None
     normalized = str(value).strip().lower()
-    if normalized == "none":
-        return "minimal"
+    # GPT-6 Luna renamed the old `minimal` level to `none`. Keep `minimal` as
+    # a legacy inbound alias so existing callers keep working, but never
+    # translate `none` back to the unsupported `minimal` value.
+    if normalized == "minimal":
+        normalized = "none"
     if normalized not in CODEX_REASONING_EFFORTS:
         raise HTTPException(status_code=400, detail="invalid_reasoning_effort")
     return normalized
