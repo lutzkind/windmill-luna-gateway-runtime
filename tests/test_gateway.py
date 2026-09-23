@@ -522,6 +522,8 @@ def test_model_allowlist_defaults_and_health_flag(monkeypatch):
     assert Settings.from_env().allowed_models == frozenset()
 
     def handler(request):
+        if request.url.host == "codex.test" and request.url.path == "/healthz":
+            return httpx.Response(200, json={"ok": True})
         raise AssertionError("provider called")
 
     with client_for(handler) as client:
