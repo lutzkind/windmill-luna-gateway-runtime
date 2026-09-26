@@ -22,4 +22,6 @@ jobs:
       - name: Run gateway tests
         run: PYTHONPATH=. pytest -q
       - name: Validate Compose
+        env:
+          LUNA_AUTO_MODEL: ci-fixture-luna
         run: docker compose -f docker-compose.yaml config >/dev/null
