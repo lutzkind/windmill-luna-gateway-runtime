@@ -4,6 +4,7 @@ import hashlib
 import json
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import Settings, create_app
@@ -238,6 +239,22 @@ def test_default_model_body_limit_supports_multimodal_requests(monkeypatch):
     monkeypatch.delenv("MAX_BODY_BYTES", raising=False)
     settings = Settings.from_env()
     assert settings.max_body_bytes == 16 * 1024 * 1024
+
+
+def test_canonical_model_environment_drives_aliases_and_rejects_stale_metadata(monkeypatch):
+    monkeypatch.setenv("LUNA_AUTO_MODEL", "gpt-7-luna")
+    monkeypatch.delenv("MODEL_ALIASES_JSON", raising=False)
+    monkeypatch.delenv("ALLOWED_MODELS", raising=False)
+
+    settings = Settings.from_env()
+
+    assert settings.luna_auto_model == "gpt-7-luna"
+    assert settings.model_aliases["luna-auto"] == "gpt-7-luna"
+    assert settings.allowed_models == frozenset({"luna-auto", "gpt-7-luna"})
+
+    monkeypatch.setenv("MODEL_ALIASES_JSON", '{"luna-auto":"gpt-6-luna"}')
+    with pytest.raises(RuntimeError, match="must match LUNA_AUTO_MODEL"):
+        Settings.from_env()
 
 
 def test_adaptive_reasoning_levels_and_explicit_override():
@@ -557,6 +574,33 @@ def test_health_reports_canonical_luna_auto_mapping():
     assert health["model_aliases"] == {"gpt-6-luna": "gpt-6-luna", "luna-auto": "gpt-6-luna"}
     assert health["reasoning_efforts"] == ["high", "low", "medium", "none"]
     assert health["model_validation_enabled"] is False
+
+
+def test_new_luna_generation_advances_through_configuration_and_alias_without_code_edits():
+    seen = []
+
+    def handler(request):
+        if request.url.path == "/healthz":
+            return httpx.Response(200, json={"ok": True})
+        seen.append(json.loads(request.content)["model"])
+        return httpx.Response(200, json=success())
+
+    with client_for(
+        handler,
+        allowed_models=frozenset({"gpt-7-luna", "luna-auto"}),
+        model_aliases={"luna-auto": "gpt-7-luna", "gpt-7-luna": "gpt-7-luna"},
+    ) as client:
+        health = client.get("/health").json()
+        response = client.post(
+            "/v1/chat/completions",
+            headers=headers(),
+            json={"model": "luna-auto", "messages": [{"role": "user", "content": "probe"}]},
+        )
+
+    assert health["luna_auto_model"] == "gpt-7-luna"
+    assert health["model_aliases"]["luna-auto"] == health["luna_auto_model"]
+    assert response.status_code == 200
+    assert seen == ["gpt-7-luna"]
 
 
 def test_luna_auto_and_concrete_model_produce_identical_reasoning_effort():

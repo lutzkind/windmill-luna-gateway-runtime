@@ -19,13 +19,14 @@ from fastapi import FastAPI, Header, HTTPException, Response
 from fastapi.responses import JSONResponse
 
 from app.codex_image import generate_codex_image
+from app.luna_model import configured_luna_model
 from app.outbound_url import OutboundURLRejected, fetch_outbound
 
 app = FastAPI(title="Codex CLI OpenAI-compatible upstream", version="1.3.0")
 
 API_KEY = os.environ.get("OPENAI_VIA_CODEX_API_KEY", "").strip()
 CODEX_BINARY = os.environ.get("CODEX_BINARY", "codex").strip() or "codex"
-CODEX_MODEL = os.environ.get("CODEX_MODEL", "").strip()
+LUNA_AUTO_MODEL = configured_luna_model()
 SOURCE_CODEX_HOME = Path(os.environ.get("CODEX_HOME", "/root/.codex").strip() or "/root/.codex")
 CODEX_AUTH_SOURCE = Path(
     os.environ.get("CODEX_AUTH_SOURCE", str(SOURCE_CODEX_HOME / "auth.json")).strip()
@@ -386,7 +387,7 @@ def _build_codex_command(
     ]
     if json_events:
         command.append("--json")
-    selected_model = str(model or CODEX_MODEL).strip()
+    selected_model = str(model or LUNA_AUTO_MODEL).strip()
     if selected_model:
         command.extend(["--model", selected_model])
     selected_effort = _codex_reasoning_effort(reasoning_effort)
@@ -595,7 +596,7 @@ async def _run_codex_once_impl(
         )
         print(json.dumps({
             "event": "codex_invocation",
-            "model": str(model or CODEX_MODEL).strip() or None,
+            "model": str(model or LUNA_AUTO_MODEL).strip() or None,
             "reasoning_effort": _codex_reasoning_effort(reasoning_effort),
             "sandbox": "read-only",
             "approval_policy": "never",
@@ -765,13 +766,13 @@ async def image_generations(payload: dict[str, Any], authorization: str | None =
 @app.get("/v1/models")
 async def models(authorization: str | None = Header(default=None)) -> dict[str, Any]:
     _authorize(authorization)
-    return {"object": "list", "data": [{"id": "gpt-6-luna", "object": "model", "owned_by": "codex-proxy"}]}
+    return {"object": "list", "data": [{"id": LUNA_AUTO_MODEL, "object": "model", "owned_by": "codex-proxy"}]}
 
 
 @app.post("/v1/chat/completions")
 async def chat_completions(payload: dict[str, Any], authorization: str | None = Header(default=None)) -> dict[str, Any]:
     _authorize(authorization)
-    requested_model = str(payload.get("model") or "gpt-6-luna")
+    requested_model = str(payload.get("model") or LUNA_AUTO_MODEL)
     web_search = _web_search_requested(payload)
     prompt, image_inputs = _prompt_and_images_from_messages(
         payload.get("messages"), web_search=web_search
@@ -803,7 +804,7 @@ async def chat_completions(payload: dict[str, Any], authorization: str | None = 
 @app.post("/v1/responses")
 async def responses(payload: dict[str, Any], authorization: str | None = Header(default=None)) -> dict[str, Any]:
     _authorize(authorization)
-    requested_model = str(payload.get("model") or "gpt-6-luna")
+    requested_model = str(payload.get("model") or LUNA_AUTO_MODEL)
     web_search = _web_search_requested(payload)
     prompt, image_inputs = _prompt_and_images_from_responses_input(
         payload.get("input"),

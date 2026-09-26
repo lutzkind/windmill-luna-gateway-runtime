@@ -61,7 +61,8 @@ whose caller-supplied model, or the model its `MODEL_ALIASES_JSON` alias resolve
 listed is rejected with HTTP 400 `model_not_allowed` before any provider call. Aliases can
 therefore only route between allowlisted names; they cannot introduce a new model.
 
-When `ALLOWED_MODELS` is unset the default `luna-auto,${LUNA_AUTO_MODEL:-gpt-6-luna}` applies.
+`LUNA_AUTO_MODEL` is required at startup and is shared with the Codex sidecar. When
+`ALLOWED_MODELS` is unset the default `luna-auto,<LUNA_AUTO_MODEL>` applies.
 An explicitly empty value disables the allowlist; it exists only as a migration escape hatch
 and is not recommended. `GET /health` reports `model_allowlist_enforced`, `luna_auto_model`,
 `model_aliases`, and `reasoning_efforts` so the active routing mode is observable without

@@ -20,6 +20,7 @@ services:
       LUNA_CODEX_HOME: /tmp/luna-codex-home
       CODEX_AUTH_SOURCE: /run/codex-session/auth.json
       CODEX_BINARY: codex
+      LUNA_AUTO_MODEL: "${LUNA_AUTO_MODEL:?Set the approved canonical Luna model}"
       CODEX_MAX_CONCURRENCY: "4"
       CODEX_TIMEOUT_SECONDS: "180"
       OPENAI_VIA_CODEX_API_KEY: internal-codex-sidecar-v1
@@ -65,9 +66,9 @@ services:
       # Single canonical selected Luna model. `luna-auto` is the only
       # caller-facing name; advance this value (via the scheduled
       # f/admins/luna-model-upgrade-check job) instead of editing callers.
-      LUNA_AUTO_MODEL: "${LUNA_AUTO_MODEL:-gpt-6-luna}"
-      ALLOWED_MODELS: "luna-auto,${LUNA_AUTO_MODEL:-gpt-6-luna}"
-      MODEL_ALIASES_JSON: '{"luna-auto":"${LUNA_AUTO_MODEL:-gpt-6-luna}"}'
+      LUNA_AUTO_MODEL: "${LUNA_AUTO_MODEL:?Set the approved canonical Luna model}"
+      ALLOWED_MODELS: "luna-auto,${LUNA_AUTO_MODEL:?Set the approved canonical Luna model}"
+      MODEL_ALIASES_JSON: '{"luna-auto":"${LUNA_AUTO_MODEL:?Set the approved canonical Luna model}"}'
       # Candidate-model validation for the scheduled Luna upgrade job.
       ENABLE_MODEL_VALIDATION: "${ENABLE_MODEL_VALIDATION:-false}"
       PROVIDER_TIMEOUT_SECONDS: "180"
