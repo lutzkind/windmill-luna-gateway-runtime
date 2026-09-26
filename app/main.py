@@ -63,6 +63,7 @@ SMOKE_PROMPT = (
 )
 CANDIDATE_MODEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 CANDIDATE_MAX_EFFORTS = 8
+CANDIDATE_MODEL_CATALOG_MAX_BYTES = 2 * 1024 * 1024
 # Levels the candidate validator may exercise: the gateway's own chat levels
 # plus the Codex CLI levels currently used by the executor and redesign
 # runner. Validation passes them through unchanged; it never normalizes.
@@ -1290,6 +1291,48 @@ def create_app(
             request_id=request_id,
         )
         return JSONResponse(content=result)
+
+    @app.get("/admin/discover-models")
+    @app.get("/v1/admin/discover-models", include_in_schema=False)
+    async def discover_models(request: Request) -> Response:
+        """Return account-visible Luna model IDs for the existing upgrade job."""
+        if not selected.enable_model_validation:
+            raise HTTPException(status_code=404, detail="endpoint_not_allowed")
+        require_gateway_auth(request, selected)
+        if not selected.server_openai_api_key:
+            raise HTTPException(status_code=503, detail="model_catalog_unavailable")
+        try:
+            async with httpx.AsyncClient(
+                transport=transport,
+                timeout=selected.timeout_seconds,
+            ) as client:
+                upstream = await client.get(
+                    f"{selected.openai_url}/models",
+                    headers={"Authorization": f"Bearer {selected.server_openai_api_key}"},
+                )
+        except httpx.HTTPError as exc:
+            raise HTTPException(status_code=502, detail="model_catalog_unavailable") from exc
+        if upstream.status_code != 200 or len(upstream.content) > CANDIDATE_MODEL_CATALOG_MAX_BYTES:
+            raise HTTPException(status_code=502, detail="model_catalog_unavailable")
+        try:
+            payload = upstream.json()
+        except ValueError as exc:
+            raise HTTPException(status_code=502, detail="model_catalog_unavailable") from exc
+        rows = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(rows, list):
+            raise HTTPException(status_code=502, detail="model_catalog_unavailable")
+        models = sorted({
+            str(row.get("id") or "").strip().lower()
+            for row in rows
+            if isinstance(row, dict)
+            and LUNA_MODEL_PATTERN.fullmatch(str(row.get("id") or "").strip())
+        })
+        if selected.luna_auto_model not in models:
+            raise HTTPException(status_code=502, detail="model_catalog_unavailable")
+        return JSONResponse(content={
+            "object": "list",
+            "data": [{"id": model, "object": "model", "owned_by": "account"} for model in models],
+        })
 
     @app.api_route("/v1/{path:path}", methods=["GET", "POST"])
     @app.api_route("/{path:path}", methods=["GET", "POST"], include_in_schema=False)

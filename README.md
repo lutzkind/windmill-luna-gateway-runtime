@@ -70,7 +70,13 @@ exposing credentials.
 
 ## Candidate validation
 
-When `ENABLE_MODEL_VALIDATION=true`, allowlisted callers may `POST /admin/validate-model`
+When `ENABLE_MODEL_VALIDATION=true`, the existing upgrade job can call
+`GET /admin/discover-models` to read only the Luna-family IDs visible to the configured
+OpenAI account. Discovery never changes the active mapping. The job still requires
+candidate validation before advancing `LUNA_AUTO_MODEL`, so an account-visible model name
+alone cannot trigger an upgrade.
+
+Allowlisted callers may `POST /admin/validate-model`
 with `{"model": "<candidate>", "reasoning_efforts": ["low", "medium", "high"], "smoke": true}`.
 The endpoint runs the candidate through the Codex upstream, checking upstream readiness,
 every requested reasoning level, and a deterministic smoke prompt. It never changes the
@@ -82,6 +88,7 @@ touches `LUNA_AUTO_MODEL`. The endpoint returns HTTP 404 when validation is disa
 - `POST /v1/chat/completions`
 - `POST /v1/responses`
 - `GET /health`
+- `GET /admin/discover-models` (only when `ENABLE_MODEL_VALIDATION=true`)
 - `POST /admin/validate-model` (only when `ENABLE_MODEL_VALIDATION=true`)
 
 The Codex upstream health response exposes `image_input_forwarding`, the transport
