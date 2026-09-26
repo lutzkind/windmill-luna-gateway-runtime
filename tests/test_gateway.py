@@ -665,6 +665,75 @@ def test_validate_model_endpoint_is_hidden_until_enabled():
     assert response.status_code == 404
 
 
+def test_discover_models_is_hidden_until_validation_is_enabled():
+    def handler(request):
+        raise AssertionError("provider called")
+
+    with client_for(handler) as client:
+        response = client.get("/admin/discover-models", headers=headers())
+    assert response.status_code == 404
+
+
+def test_discover_models_returns_only_account_visible_luna_models():
+    seen = []
+
+    def handler(request):
+        seen.append((str(request.url), request.headers.get("authorization")))
+        return httpx.Response(200, json={"data": [
+            {"id": "gpt-5.6-luna"},
+            {"id": "gpt-6-luna"},
+            {"id": "gpt-7-preview"},
+            {"id": "text-embedding-3-large"},
+        ]})
+
+    with client_for(
+        handler,
+        enable_model_validation=True,
+        server_openai_api_key="server-api-key",
+    ) as client:
+        response = client.get("/admin/discover-models", headers=headers())
+
+    assert response.status_code == 200
+    assert [row["id"] for row in response.json()["data"]] == ["gpt-5.6-luna", "gpt-6-luna"]
+    assert seen == [("https://api.test/v1/models", "Bearer server-api-key")]
+
+
+def test_discover_models_supports_the_versioned_admin_path():
+    def handler(request):
+        return httpx.Response(200, json={"data": [{"id": "gpt-6-luna"}]})
+
+    with client_for(
+        handler,
+        enable_model_validation=True,
+        server_openai_api_key="server-api-key",
+    ) as client:
+        response = client.get("/v1/admin/discover-models", headers=headers())
+
+    assert response.status_code == 200
+    assert [row["id"] for row in response.json()["data"]] == ["gpt-6-luna"]
+
+
+def test_discover_models_fails_closed_without_catalog_credential_or_active_model():
+    def handler(request):
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{"id": "gpt-7-luna"}]})
+        raise AssertionError("unexpected provider call")
+
+    with client_for(handler, enable_model_validation=True) as client:
+        missing_key = client.get("/admin/discover-models", headers=headers())
+    with client_for(
+        handler,
+        enable_model_validation=True,
+        server_openai_api_key="server-api-key",
+    ) as client:
+        missing_active_model = client.get("/admin/discover-models", headers=headers())
+
+    assert missing_key.status_code == 503
+    assert missing_key.json()["detail"] == "model_catalog_unavailable"
+    assert missing_active_model.status_code == 502
+    assert missing_active_model.json()["detail"] == "model_catalog_unavailable"
+
+
 def test_validate_model_endpoint_requires_allowlisted_caller():
     def handler(request):
         raise AssertionError("provider called")
