@@ -29,6 +29,16 @@ def test_codex_command_forwards_model_and_reasoning_effort():
     assert "--ignore-user-config" in command
 
 
+def test_codex_sidecar_default_and_model_catalog_follow_canonical_mapping(monkeypatch):
+    monkeypatch.setattr(codex_upstream, "LUNA_AUTO_MODEL", "gpt-7-luna")
+    command = codex_upstream._build_codex_command(output_path="/tmp/final.txt")
+    assert command[command.index("--model") + 1] == "gpt-7-luna"
+
+    monkeypatch.setattr(codex_upstream, "_authorize", lambda _authorization: None)
+    payload = asyncio.run(codex_upstream.models(authorization=None))
+    assert payload["data"][0]["id"] == "gpt-7-luna"
+
+
 def test_codex_command_forwards_image_paths():
     command = codex_upstream._build_codex_command(
         output_path="/tmp/final.txt",

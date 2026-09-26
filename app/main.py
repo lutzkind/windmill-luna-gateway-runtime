@@ -17,6 +17,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from jsonschema import ValidationError, validate as validate_json_schema
+from app.luna_model import LUNA_MODEL_PATTERN, configured_luna_model
 LOGGER = logging.getLogger(__name__)
 
 EndpointKind = Literal["chat", "responses"]
@@ -96,11 +97,13 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
-        aliases_raw = os.getenv(
-            "MODEL_ALIASES_JSON",
-            '{"luna-auto":"gpt-6-luna"}',
+        canonical_model = configured_luna_model()
+        aliases_raw = os.getenv("MODEL_ALIASES_JSON")
+        aliases = (
+            json.loads(aliases_raw)
+            if aliases_raw is not None
+            else {"luna-auto": canonical_model}
         )
-        aliases = json.loads(aliases_raw)
         if not isinstance(aliases, dict) or not all(
             isinstance(key, str) and isinstance(value, str)
             for key, value in aliases.items()
@@ -108,12 +111,16 @@ class Settings:
             raise RuntimeError(
                 "MODEL_ALIASES_JSON must be a string-to-string JSON object"
             )
+        if str(aliases.get("luna-auto") or "").strip().lower() != canonical_model:
+            raise RuntimeError("MODEL_ALIASES_JSON luna-auto target must match LUNA_AUTO_MODEL")
+        for alias_model in aliases.values():
+            if LUNA_MODEL_PATTERN.fullmatch(alias_model) and alias_model.strip().lower() != canonical_model:
+                raise RuntimeError("Every concrete Luna alias target must match LUNA_AUTO_MODEL")
 
+        allowed_raw = os.getenv("ALLOWED_MODELS")
         allowed = frozenset(
             part.strip()
-            for part in os.getenv(
-                "ALLOWED_MODELS", "luna-auto,gpt-6-luna"
-            ).split(",")
+            for part in (allowed_raw if allowed_raw is not None else f"luna-auto,{canonical_model}").split(",")
             if part.strip()
         )
         configured_key_hashes = os.getenv("ALLOWED_API_KEY_SHA256S", "")
