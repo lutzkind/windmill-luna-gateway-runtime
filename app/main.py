@@ -148,8 +148,11 @@ class Settings:
             server_openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
             allowed_models=allowed,
             model_aliases=aliases,
+            # Keep this strictly larger than the sidecar's
+            # CODEX_TIMEOUT_SECONDS (default 180) so the sidecar's typed 504
+            # reaches the caller before the gateway abandons the request.
             timeout_seconds=float(
-                os.getenv("PROVIDER_TIMEOUT_SECONDS", "180")
+                os.getenv("PROVIDER_TIMEOUT_SECONDS", "210")
             ),
             max_body_bytes=int(
                 os.getenv("MAX_BODY_BYTES", str(DEFAULT_MAX_BODY_BYTES))

@@ -22,6 +22,10 @@ services:
       CODEX_BINARY: codex
       LUNA_AUTO_MODEL: "${LUNA_AUTO_MODEL:?Set the approved canonical Luna model}"
       CODEX_MAX_CONCURRENCY: "4"
+      # Sidecar-only deadline for one Codex CLI invocation. The gateway's
+      # PROVIDER_TIMEOUT_SECONDS must stay strictly larger (210) so this
+      # sidecar's typed 504 codex execution timed out can reach the gateway
+      # before the gateway gives up on the request.
       CODEX_TIMEOUT_SECONDS: "180"
       OPENAI_VIA_CODEX_API_KEY: internal-codex-sidecar-v1
     volumes:
@@ -71,7 +75,10 @@ services:
       MODEL_ALIASES_JSON: '{"luna-auto":"${LUNA_AUTO_MODEL:?Set the approved canonical Luna model}"}'
       # Candidate-model validation for the scheduled Luna upgrade job.
       ENABLE_MODEL_VALIDATION: "${ENABLE_MODEL_VALIDATION:-false}"
-      PROVIDER_TIMEOUT_SECONDS: "180"
+      # Must stay strictly larger than the sidecar's CODEX_TIMEOUT_SECONDS
+      # (180) so the sidecar's typed 504 can be relayed instead of the
+      # gateway abandoning the request at the same moment.
+      PROVIDER_TIMEOUT_SECONDS: "210"
       # Multimodal Etsy QA carries bounded base64 image inputs. Keep this
       # separate from the larger passthrough limit and below the upstream's
       # per-image limit.

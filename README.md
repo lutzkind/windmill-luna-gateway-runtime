@@ -9,6 +9,26 @@ Standalone OpenAI-compatible gateway for Windmill. It is unrelated to and fully 
 - Fallback: official OpenAI API only when Codex explicitly reports quota or usage-limit exhaustion. Capacity, rate-limit, authentication, network, timeout, upstream, and invalid structured-output failures do not fall back.
 - The quota circuit prevents repeated Codex attempts during a confirmed quota-exhaustion window; subsequent Luna requests use the API fallback until that circuit expires.
 
+## Timeouts and process cleanup
+
+The gateway bounds one provider call with `PROVIDER_TIMEOUT_SECONDS` (default
+210), while the sidecar bounds each Codex CLI invocation with
+`CODEX_TIMEOUT_SECONDS` (default 180). The gateway deadline is deliberately
+longer so the sidecar's typed HTTP 504 `codex execution timed out` reaches the
+caller before the gateway abandons the request. Keep the two values coherent
+when overriding either one; `docker-compose.yaml` documents the same contract.
+
+Every Codex CLI invocation is started in its own process group
+(`start_new_session=True`), because the CLI spawns sandbox/node descendants.
+On timeout or request cancellation the sidecar SIGTERMs the whole group, waits
+a bounded grace period (default 5s), SIGKILLs any survivor, closes stdin and
+the stdout/stderr pipe transports, and only then returns the typed 504 or
+re-raises the cancellation. The whole cleanup budget stays well inside the 30s
+margin between the two deadlines. A survivor holding the inherited pipe write
+ends can therefore never wedge another request, and the auth-sync lock and
+concurrency semaphore are always released, so the next request runs
+immediately.
+
 ## Authentication
 
 Windmill authenticates to the gateway with an internal bearer whose SHA-256 fingerprint is allowlisted. For Luna quota fallback, the gateway uses its server-side `OPENAI_API_KEY`; the internal Windmill bearer is never forwarded to OpenAI.
