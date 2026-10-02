@@ -77,6 +77,13 @@ def test_codex_auth_survives_future_host_login_atomic_replacement():
     assert "shared_auth_mode=660" in entrypoint
 
 
+def test_gateway_deadline_is_longer_than_sidecar_deadline():
+    text = COMPOSE.read_text(encoding="utf-8")
+
+    assert 'CODEX_TIMEOUT_SECONDS: "180"' in text
+    assert 'PROVIDER_TIMEOUT_SECONDS: "210"' in text
+
+
 def test_only_the_canonical_codex_directory_can_be_the_auth_source():
     text = COMPOSE.read_text(encoding="utf-8")
     entrypoint = (Path(__file__).parents[1] / "runtime-entrypoint.sh").read_text(encoding="utf-8")
