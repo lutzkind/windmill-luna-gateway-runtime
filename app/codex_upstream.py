@@ -6,6 +6,7 @@ import binascii
 import json
 import os
 import shutil
+import signal
 import stat
 import tempfile
 import time
@@ -36,6 +37,20 @@ RUNTIME_CODEX_HOME = Path(os.environ.get("LUNA_CODEX_HOME", "/tmp/luna-codex-hom
 SHARED_RUNTIME_GID = max(1, int(os.environ.get("LUNA_SHARED_RUNTIME_GID", "10001")))
 SHARED_AUTH_MODE = 0o660
 TIMEOUT_SECONDS = max(30, int(os.environ.get("CODEX_TIMEOUT_SECONDS", "180")))
+# Every Codex CLI invocation runs in its own process group. On timeout or
+# cancellation the sidecar escalates SIGTERM -> bounded grace -> SIGKILL for
+# the whole group and never awaits an unbounded pipe read afterwards. The caps
+# keep the worst-case cleanup budget (10s + 5s + 5s) inside the 30s margin
+# between CODEX_TIMEOUT_SECONDS and the gateway's PROVIDER_TIMEOUT_SECONDS.
+PROCESS_TERMINATE_GRACE_SECONDS = max(
+    0.5,
+    min(10.0, float(os.environ.get("CODEX_PROCESS_TERMINATE_GRACE_SECONDS", "5"))),
+)
+PROCESS_KILL_WAIT_SECONDS = max(
+    0.5,
+    min(5.0, float(os.environ.get("CODEX_PROCESS_KILL_WAIT_SECONDS", "5"))),
+)
+PROCESS_POLL_INTERVAL_SECONDS = 0.05
 MAX_CONCURRENCY = max(1, int(os.environ.get("CODEX_MAX_CONCURRENCY", "4")))
 SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENCY)
 AUTH_SYNC_LOCK = asyncio.Lock()
@@ -558,6 +573,141 @@ async def _run_codex_once(
         )
 
 
+def _process_group_alive(pgid: int) -> bool:
+    """Return True while any process remains in the given process group."""
+    if pgid <= 0:
+        return False
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:  # pragma: no cover - same-user processes only
+        return True
+    return True
+
+
+def _signal_process_group(process: asyncio.subprocess.Process, sig: int) -> None:
+    """Signal the request-owned process group, falling back to the child."""
+    pgid = process.pid
+    sent = False
+    if pgid is not None and pgid > 0:
+        try:
+            os.killpg(pgid, sig)
+            sent = True
+        except (ProcessLookupError, PermissionError):
+            pass
+    if not sent:
+        try:
+            process.send_signal(sig)
+        except (ProcessLookupError, RuntimeError):
+            pass
+
+
+def _close_process_stdin(process: asyncio.subprocess.Process) -> None:
+    """Close the inherited stdin pipe so no descriptor is retained."""
+    if process.stdin is None:
+        return
+    try:
+        process.stdin.close()
+    except Exception:  # pragma: no cover - best-effort descriptor release
+        pass
+
+
+def _close_process_transport(process: asyncio.subprocess.Process) -> None:
+    """Close stdout/stderr pipe transports so no descriptor is retained.
+
+    A survivor holding the inherited pipe write ends must never keep the
+    sidecar's read descriptors (or any subsequent ``communicate`` call)
+    alive; the transport owns both read pipes.
+    """
+    transport = getattr(process, "_transport", None)
+    if transport is None:
+        return
+    try:
+        transport.close()
+    except Exception:  # pragma: no cover - best-effort descriptor release
+        pass
+
+
+async def _wait_bounded(process: asyncio.subprocess.Process, timeout: float) -> bool:
+    """Wait (bounded) until the direct child is reaped and its group is gone.
+
+    Every await is bounded by the deadline. A second cancellation is absorbed
+    so cleanup cannot be abandoned halfway through.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(0.0, timeout)
+    pgid = process.pid or 0
+    while True:
+        if process.returncode is not None and not _process_group_alive(pgid):
+            return True
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return False
+        try:
+            await asyncio.sleep(min(PROCESS_POLL_INTERVAL_SECONDS, remaining))
+        except asyncio.CancelledError:
+            continue
+
+
+async def _terminate_process_group(
+    process: asyncio.subprocess.Process,
+    *,
+    grace_seconds: float | None = None,
+) -> None:
+    """Terminate the full request-owned process group with bounded escalation.
+
+    Every Codex invocation is started with ``start_new_session=True``, so the
+    direct child's pid is also its process-group id and sandbox/node
+    grandchildren inherit that group. Killing only the direct child would
+    leave grandchildren holding the inherited stdout/stderr pipes and the
+    shared auth lock, which is what wedged the single-worker sidecar.
+    """
+    grace = (
+        PROCESS_TERMINATE_GRACE_SECONDS
+        if grace_seconds is None
+        else max(0.0, float(grace_seconds))
+    )
+    _close_process_stdin(process)
+    _signal_process_group(process, signal.SIGTERM)
+    if not await _wait_bounded(process, grace):
+        _signal_process_group(process, signal.SIGKILL)
+        await _wait_bounded(process, PROCESS_KILL_WAIT_SECONDS)
+    if process.returncode is None:
+        # Bound the final reap as well; process.wait() must never be able to
+        # hang cleanup even if the child is stuck in the kernel.
+        try:
+            await asyncio.wait_for(
+                process.wait(), timeout=PROCESS_KILL_WAIT_SECONDS
+            )
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            pass
+    _close_process_transport(process)
+
+
+async def _communicate_with_timeout(
+    process: asyncio.subprocess.Process,
+    prompt: bytes,
+    timeout: float,
+) -> tuple[bytes, bytes]:
+    """Communicate with a request-owned subprocess and always clean it up.
+
+    On timeout the typed HTTP 504 is raised only after the whole process
+    group is gone. On task cancellation the group is killed before the
+    ``CancelledError`` is re-raised. ``process.communicate`` is never called
+    again after a kill, because a surviving grandchild holding the pipe write
+    ends would block that call forever.
+    """
+    try:
+        return await asyncio.wait_for(process.communicate(prompt), timeout=timeout)
+    except asyncio.TimeoutError:
+        await _terminate_process_group(process)
+        raise HTTPException(status_code=504, detail="codex execution timed out") from None
+    except asyncio.CancelledError:
+        await _terminate_process_group(process)
+        raise
+
+
 async def _run_codex_once_impl(
     prompt: str,
     schema: dict[str, Any] | None,
@@ -618,16 +768,15 @@ async def _run_codex_once_impl(
             stderr=asyncio.subprocess.PIPE,
             env=env,
             cwd=tmp_dir,
+            # The child leads its own session/process group so cleanup can
+            # signal every Codex sandbox/node descendant it spawns.
+            start_new_session=True,
         )
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(prompt.encode("utf-8")),
-                timeout=TIMEOUT_SECONDS,
-            )
-        except TimeoutError:
-            process.kill()
-            await process.communicate()
-            raise HTTPException(status_code=504, detail="codex execution timed out")
+        stdout, stderr = await _communicate_with_timeout(
+            process,
+            prompt.encode("utf-8"),
+            TIMEOUT_SECONDS,
+        )
 
         stdout_text = stdout.decode("utf-8", errors="replace").strip()
         error_text = stderr.decode("utf-8", errors="replace").strip()
