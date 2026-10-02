@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - '.github/ci-standard.yml'
+      - '.github/ci-standard/agent_friendliness.py'
       - '.github/workflows/ci-standard-heavy.yml'
       - '.github/workflows/ci-standard.yml'
   workflow_dispatch:
@@ -35,6 +36,11 @@ jobs:
         run: |
           set -euo pipefail
           git diff --check
+      - name: Check agent-friendliness contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/ci-standard/agent_friendliness.py --root .
       - name: Clean generated workspace data
         if: always()
         shell: bash
