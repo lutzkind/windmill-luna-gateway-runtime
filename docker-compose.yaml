@@ -13,25 +13,15 @@ services:
       - /run:rw,nosuid,nodev,size=32m
       - /tmp:rw,nosuid,nodev,size=512m
     environment:
-      # Keep the current server ChatGPT/Codex session as the single auth
-      # source. CODEX_HOME itself is the directory bind so Codex atomic
-      # auth.json replacement remains on the canonical host directory.
       CODEX_HOME: /run/codex-session
       LUNA_CODEX_HOME: /tmp/luna-codex-home
       CODEX_AUTH_SOURCE: /run/codex-session/auth.json
       CODEX_BINARY: codex
       LUNA_AUTO_MODEL: "${LUNA_AUTO_MODEL:?Set the approved canonical Luna model}"
       CODEX_MAX_CONCURRENCY: "4"
-      # Sidecar-only deadline for one Codex CLI invocation. The gateway's
-      # PROVIDER_TIMEOUT_SECONDS must stay strictly larger (210) so this
-      # sidecar's typed 504 codex execution timed out can reach the gateway
-      # before the gateway gives up on the request.
       CODEX_TIMEOUT_SECONDS: "180"
       OPENAI_VIA_CODEX_API_KEY: internal-codex-sidecar-v1
     volumes:
-      # Bind the host Codex directory, not auth.json as a Coolify-managed file.
-      # Codex refreshes auth.json with atomic replacement, so the CLI must use
-      # this directory directly rather than a symlink or private copy.
       - /root/.codex:/run/codex-session:rw
     expose: ["18080"]
     networks: [gateway-private]
@@ -60,28 +50,17 @@ services:
         condition: service_healthy
     environment:
       ALLOWED_API_KEY_SHA256S: "f777774c7a4100fc25022f34d27483a9080679aed01a0fca54ced407ca09df9f,68471dcada6d4d3b0468b20ad6ea6fc2ea21451d4d7a28b7fdb63be763679817"
-      # Additional callers are injected through the existing Coolify runtime
-      # environment so application-specific credentials never enter Git.
       ADDITIONAL_ALLOWED_API_KEY_SHA256S: "${ADDITIONAL_ALLOWED_API_KEY_SHA256S:-}"
       CODEX_UPSTREAM_API_KEY: internal-codex-sidecar-v1
       CODEX_UPSTREAM_URL: http://codex-upstream:18080/v1
       OPENAI_API_BASE_URL: https://api.openai.com/v1
       OPENAI_API_KEY: "${OPENAI_API_KEY}"
-      # Single canonical selected Luna model. `luna-auto` is the only
-      # caller-facing name; advance this value (via the scheduled
-      # f/admins/luna-model-upgrade-check job) instead of editing callers.
+      ALLOW_PAID_OPENAI_IMAGE_FALLBACK: "${ALLOW_PAID_OPENAI_IMAGE_FALLBACK:-false}"
       LUNA_AUTO_MODEL: "${LUNA_AUTO_MODEL:?Set the approved canonical Luna model}"
       ALLOWED_MODELS: "luna-auto,${LUNA_AUTO_MODEL:?Set the approved canonical Luna model}"
       MODEL_ALIASES_JSON: '{"luna-auto":"${LUNA_AUTO_MODEL:?Set the approved canonical Luna model}"}'
-      # Candidate-model validation for the scheduled Luna upgrade job.
       ENABLE_MODEL_VALIDATION: "${ENABLE_MODEL_VALIDATION:-false}"
-      # Must stay strictly larger than the sidecar's CODEX_TIMEOUT_SECONDS
-      # (180) so the sidecar's typed 504 can be relayed instead of the
-      # gateway abandoning the request at the same moment.
       PROVIDER_TIMEOUT_SECONDS: "210"
-      # Multimodal Etsy QA carries bounded base64 image inputs. Keep this
-      # separate from the larger passthrough limit and below the upstream's
-      # per-image limit.
       MAX_BODY_BYTES: "16777216"
       MAX_CONCURRENCY: "4"
       TRANSIENT_FAILURE_THRESHOLD: "3"
