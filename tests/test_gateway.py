@@ -418,7 +418,7 @@ def test_codex_image_primary_is_not_api_passthrough():
     assert seen == ["https://codex.test/v1/images/generations"]
 
 
-def test_image_quota_falls_back_without_opening_text_circuit():
+def test_image_quota_fails_closed_without_opening_text_circuit():
     seen = []
     def handler(request):
         seen.append(str(request.url))
@@ -426,24 +426,34 @@ def test_image_quota_falls_back_without_opening_text_circuit():
             return httpx.Response(200, json={"ok": True})
         if request.url.host == "codex.test" and request.url.path.endswith("/images/generations"):
             return httpx.Response(429, json={"error": {"message": "image_gen usage limit reached", "limit_id": "image_gen"}})
-        if request.url.host == "api.test" and request.url.path.endswith("/images/generations"):
-            return httpx.Response(200, json={"data": [{"b64_json": "ZmFsbGJhY2s="}], "size": "1024x1536"})
         if request.url.host == "codex.test" and request.url.path.endswith("/chat/completions"):
             return httpx.Response(200, json=success("text-still-codex"))
+        if request.url.host == "api.test" and request.url.path.endswith("/images/generations"):
+            raise AssertionError("paid OpenAI image fallback must stay disabled")
         raise AssertionError(f"unexpected provider call: {request.url}")
     with client_for(handler, server_openai_api_key="server-api-secret") as client:
         image = client.post("/v1/images/generations", headers=headers(), json={"model": "gpt-image-2", "prompt": "restaurant lighting", "size": "1024x1536"})
         text = client.post("/v1/chat/completions", headers=headers(), json=payload())
         health = client.get("/health").json()
-    assert image.status_code == 200
-    assert image.headers["x-luna-gateway-provider"] == "openai-api"
-    assert image.headers["x-luna-gateway-fallback"] == "true"
-    assert image.headers["x-luna-gateway-fallback-reason"] == "image_quota"
+    assert image.status_code == 429
+    assert image.json()["error"]["code"] == "image_quota_unavailable"
+    assert image.headers["x-luna-gateway-provider"] == "none"
+    assert image.headers["x-luna-gateway-fallback"] == "false"
+    assert "x-luna-gateway-fallback-reason" not in image.headers
     assert text.status_code == 200
     assert text.headers["x-luna-gateway-provider"] == "codex"
     assert health["image_circuit"]["open"] is True
     assert health["circuit"]["open"] is False
+    assert health["image_generation"] == "codex-only-paid-api-disabled"
+    assert not any(url.startswith("https://api.test/") for url in seen)
 
+
+def test_paid_image_edits_passthrough_is_disabled():
+    def handler(request):
+        raise AssertionError(f"paid image API must not be called: {request.url}")
+    with client_for(handler, server_openai_api_key="server-api-secret") as client:
+        response = client.post("/v1/images/edits", headers=headers(), content=b"blocked")
+    assert response.status_code == 404
 
 def test_model_allowlist_rejects_unlisted_models_before_provider_calls():
     def handler(request):

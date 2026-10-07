@@ -27,7 +27,6 @@ API_PASSTHROUGH_METHODS: dict[str, frozenset[str]] = {
     "audio/translations": frozenset({"POST"}),
     "audio/speech": frozenset({"POST"}),
     "embeddings": frozenset({"POST"}),
-    "images/edits": frozenset({"POST"}),
     "models": frozenset({"GET"}),
 }
 MAX_PASSTHROUGH_BODY_BYTES = 50 * 1024 * 1024
@@ -744,47 +743,24 @@ class Gateway:
                     )
                 fallback_reason = "image_circuit_open:quota"
 
-            if not api_key:
-                return json_error(
-                    status_code=502,
-                    message="Codex image generation was unavailable and no OpenAI API fallback credential was supplied.",
-                    code="image_fallback_key_missing",
+            return Response(
+                content=json.dumps(
+                    {
+                        "error": {
+                            "message": "Codex image quota is exhausted; paid OpenAI image API fallback is disabled.",
+                            "type": "gateway_provider_error",
+                            "code": "image_quota_unavailable",
+                        }
+                    }
+                ),
+                status_code=429,
+                media_type="application/json",
+                headers=gateway_headers(
+                    provider="none",
+                    fallback_used=False,
+                    fallback_reason=None,
                     request_id=request_id,
-                    fallback_reason=fallback_reason,
-                )
-            try:
-                api_response = await self.client.post(
-                    f"{self.settings.openai_url}/images/generations",
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                        "Accept": "application/json",
-                        "X-Request-ID": request_id,
-                    },
-                    json=payload,
-                )
-            except httpx.TimeoutException:
-                return json_error(
-                    status_code=504,
-                    message="The OpenAI Images API fallback timed out.",
-                    code="image_api_timeout",
-                    request_id=request_id,
-                    fallback_reason=fallback_reason,
-                )
-            except httpx.HTTPError:
-                return json_error(
-                    status_code=502,
-                    message="The OpenAI Images API fallback request failed.",
-                    code="image_api_network",
-                    request_id=request_id,
-                    fallback_reason=fallback_reason,
-                )
-            return relay_response(
-                api_response,
-                provider="openai-api",
-                fallback_used=True,
-                fallback_reason=fallback_reason,
-                request_id=request_id,
+                ),
             )
 
     async def proxy_openai_api(
@@ -1215,7 +1191,7 @@ def create_app(
             "test_controls": selected.enable_test_controls,
             "circuit": circuit,
             "image_circuit": image_circuit,
-            "image_generation": "codex-primary-api-fallback",
+            "image_generation": "codex-only-paid-api-disabled",
         }
         return JSONResponse(
             status_code=200 if codex_upstream["ok"] else 503,
