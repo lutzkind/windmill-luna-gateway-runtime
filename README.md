@@ -8,7 +8,7 @@ Standalone OpenAI-compatible gateway for Windmill. It is unrelated to and fully 
 - Multimodal Chat Completions `image_url` and Responses `input_image` inputs are materialized into bounded temporary files and forwarded to Codex CLI with repeated `--image` flags. Image inputs are never reduced to text-only placeholders.
 - Text fallback: official OpenAI API only when Codex explicitly reports quota or usage-limit exhaustion. Capacity, rate-limit, authentication, network, timeout, upstream, and invalid structured-output failures do not fall back.
 - The quota circuit prevents repeated Codex attempts during a confirmed quota-exhaustion window; subsequent Luna text requests use the API fallback until that circuit expires.
-- Image generation is fail-closed: Codex image quota exhaustion never uses the paid OpenAI Images API, and direct OpenAI image-edit passthrough is not exposed.
+- Image generation is fail-closed by default. Set `ALLOW_PAID_OPENAI_IMAGE_FALLBACK=true` and redeploy to permit the official OpenAI Images API only after confirmed Codex image quota exhaustion; non-quota image failures still do not fall back, and direct OpenAI image-edit passthrough remains blocked.
 
 ## Timeouts and process cleanup
 
@@ -32,7 +32,7 @@ immediately.
 
 ## Authentication
 
-Windmill authenticates to the gateway with an internal bearer token whose SHA-256 fingerprint is allowlisted. For Luna quota fallback, the gateway uses its server-side `OPENAI_API_KEY`; the internal Windmill bearer token is never forwarded to OpenAI.
+Windmill authenticates to the gateway with an internal bearer whose SHA-256 fingerprint is allowlisted. For Luna quota fallback, the gateway uses its server-side `OPENAI_API_KEY`; the internal Windmill bearer is never forwarded to OpenAI.
 
 The Codex sidecar uses the host's canonical `/root/.codex` directory through
 the `/run/codex-session` directory bind. `CODEX_HOME` points directly at that
